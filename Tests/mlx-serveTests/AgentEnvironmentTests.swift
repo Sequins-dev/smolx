@@ -106,6 +106,79 @@ struct AgentEnvironmentTests {
         #expect(cfg.contains("\"attachment\": true"))
     }
 
+    @Test func piPlanSandboxesAgentDirAndListsAllModels() throws {
+        let installed = [
+            ModelDescriptor(name: "a", repoId: "x/a", localPath: "/p/a",
+                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(name: "b", repoId: "x/b", localPath: "/p/b",
+                            capability: .vision, diskSizeBytes: 200, addedAt: Date()),
+        ]
+        let plan = try AgentEnvironment.plan(
+            agentName: "pi", baseURL: "http://127.0.0.1:8080",
+            modelName: "b", authToken: "secret",
+            installedModels: installed)
+        #expect(plan.executable == "pi")
+        // PI_CODING_AGENT_DIR points away from the user's real ~/.pi/agent
+        // so a pre-existing Pi install can't bleed in (or get clobbered).
+        let dir = plan.env["PI_CODING_AGENT_DIR"]
+        #expect(dir != nil)
+        #expect(dir?.contains(".mlx-serve") == true)
+        // models.json gets written under that sandboxed dir.
+        let models = plan.files.first { $0.path.hasSuffix("models.json") }
+        #expect(models != nil)
+        #expect(models?.path.hasPrefix(dir ?? "") == true)
+        let cfg = models?.contents ?? ""
+        // openai-completions is Pi's API tag for OpenAI Chat Completions —
+        // what mlx-serve actually serves.
+        #expect(cfg.contains("\"api\": \"openai-completions\""))
+        #expect(cfg.contains("http://127.0.0.1:8080/v1"))
+        #expect(cfg.contains("\"apiKey\": \"secret\""))
+        // Both installed models surface in Pi's /model picker.
+        #expect(cfg.contains("\"a\""))
+        #expect(cfg.contains("\"b\""))
+        // The --model entry is listed first so it's Pi's default selection.
+        let posB = cfg.range(of: "\"id\": \"b\"")?.lowerBound
+        let posA = cfg.range(of: "\"id\": \"a\"")?.lowerBound
+        #expect(posB != nil && posA != nil)
+        #expect(posB! < posA!)
+        // Vision model gets "image" in its input array.
+        #expect(cfg.contains("\"image\""))
+    }
+
+    @Test func crushPlanInjectsOpenAICompatProvider() throws {
+        let installed = [
+            ModelDescriptor(name: "m1", repoId: "x/m1", localPath: "/p/m1",
+                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
+        ]
+        let plan = try AgentEnvironment.plan(
+            agentName: "crush", baseURL: "http://127.0.0.1:8080",
+            modelName: "m1", authToken: "tok",
+            installedModels: installed)
+        #expect(plan.executable == "crush")
+        // CRUSH_GLOBAL_CONFIG points at the config *directory*, not the
+        // crush.json file — Crush appends `/crush.json` internally. Setting
+        // it to a file path produces `…/crush.json/crush.json: not a
+        // directory` at load time.
+        let cfgDir = plan.env["CRUSH_GLOBAL_CONFIG"]
+        #expect(cfgDir != nil)
+        #expect(cfgDir?.contains(".mlx-serve") == true)
+        #expect(cfgDir?.hasSuffix("crush.json") == false)
+        // crush.json is written inside that directory.
+        let file = plan.files.first { $0.path == (cfgDir ?? "") + "/crush.json" }
+        #expect(file != nil)
+        let cfg = file?.contents ?? ""
+        // `openai-compat` is Crush's documented type for OpenAI-shaped
+        // self-hosted endpoints (vs `openai` which proxies through OpenAI).
+        #expect(cfg.contains("\"type\": \"openai-compat\""))
+        #expect(cfg.contains("\"base_url\": \"http://127.0.0.1:8080/v1\""))
+        #expect(cfg.contains("\"api_key\": \"tok\""))
+        #expect(cfg.contains("\"id\": \"m1\""))
+        // `context_window` is required by Crush's schema; the provider is
+        // silently dropped from the UI if it's missing.
+        #expect(cfg.contains("\"context_window\":"))
+        #expect(cfg.contains("\"default_max_tokens\":"))
+    }
+
     @Test func unknownAgentThrows() {
         #expect(throws: AgentEnvironment.ResolveError.self) {
             _ = try AgentEnvironment.plan(

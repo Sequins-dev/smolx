@@ -48,6 +48,8 @@ enum AgentEnvironment {
         case codex
         case aider
         case opencode
+        case pi
+        case crush
     }
 
     enum ResolveError: Error, CustomStringConvertible {
@@ -214,6 +216,94 @@ enum AgentEnvironment {
             return Plan(
                 executable: "opencode",
                 env: ["OPENCODE_CONFIG_CONTENT": oneLineConfig])
+        case .pi:
+            // Pi (pi.dev / @earendil-works/pi-coding-agent) reads providers
+            // from ~/.pi/agent/models.json by default. PI_CODING_AGENT_DIR
+            // overrides that directory, so we point it at a sandbox under
+            // ~/.mlx-serve/ to avoid touching the user's real Pi state
+            // (skills, sessions, auth.json, the user's own models.json).
+            //
+            // Pi's schema is `providers.<id>` with `api: "openai-completions"`
+            // for OpenAI-compatible servers. We list every installed mlx-serve
+            // model so they appear in Pi's `/model` picker; the one passed
+            // via --model is listed first so it surfaces as the default.
+            let piHome = Paths.appRoot
+                .appendingPathComponent("pi-agent", isDirectory: true).path
+            let piModelEntries = (installedModels.isEmpty
+                ? [ModelDescriptor(name: modelName, repoId: "", localPath: "",
+                                   capability: .text, diskSizeBytes: 0, addedAt: Date())]
+                : installedModels)
+            let piOrdered = piModelEntries.sorted { a, _ in a.name == modelName }
+            let piModelsJSON = piOrdered.map { m in
+                let inputs = m.capability == .vision
+                    ? "[\"text\", \"image\"]" : "[\"text\"]"
+                return """
+                          { "id": "\(m.name)", "name": "\(m.name)", "input": \(inputs), "contextWindow": 32768, "maxTokens": 4096 }
+                    """
+            }.joined(separator: ",\n")
+            let piModelsConfig = """
+                {
+                  "providers": {
+                    "mlx-serve": {
+                      "baseUrl": "\(baseURL)/v1",
+                      "api": "openai-completions",
+                      "apiKey": "\(token)",
+                      "models": [
+                \(piModelsJSON)
+                      ]
+                    }
+                  }
+                }
+                """
+            return Plan(
+                executable: "pi",
+                env: ["PI_CODING_AGENT_DIR": piHome],
+                files: [.init(path: piHome + "/models.json",
+                              contents: piModelsConfig)])
+        case .crush:
+            // Charm's Crush reads its config from .crush.json (CWD),
+            // crush.json (CWD), or $HOME/.config/crush/crush.json. The env
+            // var CRUSH_GLOBAL_CONFIG points at the *directory* containing
+            // crush.json (NOT the file itself — Crush appends `/crush.json`
+            // internally; setting it to a file path produces a path like
+            // `…/crush.json/crush.json: not a directory` error). We sandbox
+            // it under ~/.mlx-serve/ and declare mlx-serve as an
+            // `openai-compat` provider with every installed model listed.
+            //
+            // The model list uses Crush's documented keys (`context_window`,
+            // `default_max_tokens`). Without them Crush either fails to load
+            // the provider or falls back to broken defaults.
+            let crushConfigDir = Paths.appRoot
+                .appendingPathComponent("crush", isDirectory: true).path
+            let crushConfigPath = crushConfigDir + "/crush.json"
+            let crushModelEntries = (installedModels.isEmpty
+                ? [ModelDescriptor(name: modelName, repoId: "", localPath: "",
+                                   capability: .text, diskSizeBytes: 0, addedAt: Date())]
+                : installedModels)
+            let crushModelsJSON = crushModelEntries.map { m in
+                """
+                          { "id": "\(m.name)", "name": "\(m.name)", "context_window": 32768, "default_max_tokens": 4096 }
+                    """
+            }.joined(separator: ",\n")
+            let crushConfig = """
+                {
+                  "$schema": "https://charm.land/crush.json",
+                  "providers": {
+                    "mlx-serve": {
+                      "type": "openai-compat",
+                      "base_url": "\(baseURL)/v1",
+                      "api_key": "\(token)",
+                      "models": [
+                \(crushModelsJSON)
+                      ]
+                    }
+                  }
+                }
+                """
+            return Plan(
+                executable: "crush",
+                env: ["CRUSH_GLOBAL_CONFIG": crushConfigDir],
+                files: [.init(path: crushConfigPath, contents: crushConfig)])
         }
     }
 }
