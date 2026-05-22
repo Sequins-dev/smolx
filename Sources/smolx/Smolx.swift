@@ -13,6 +13,7 @@ struct Smolx: AsyncParsableCommand {
             ModelsCommand.self,
             RemoveCommand.self,
             RunCommand.self,
+            ConfigCommand.self,
         ]
     )
 }

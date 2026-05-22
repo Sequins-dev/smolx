@@ -8,7 +8,7 @@ struct AgentEnvironmentTests {
         let plan = try AgentEnvironment.plan(
             agentName: "claude",
             baseURL: "http://127.0.0.1:8080",
-            modelName: "llama-3.2-3b",
+            models: ModelTuple(single: "llama-3.2-3b"),
             authToken: "tok")
         #expect(plan.executable == "claude")
         #expect(plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080")
@@ -33,7 +33,7 @@ struct AgentEnvironmentTests {
         let plan = try AgentEnvironment.plan(
             agentName: "codex",
             baseURL: "http://127.0.0.1:8080",
-            modelName: "x",
+            models: ModelTuple(single: "x"),
             authToken: nil)
         #expect(plan.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8080/v1")
         #expect(plan.env["OPENAI_API_KEY"] == "smolx-local")
@@ -66,7 +66,7 @@ struct AgentEnvironmentTests {
     @Test func aiderPlanSetsOpenAIEnvVars() throws {
         let plan = try AgentEnvironment.plan(
             agentName: "aider", baseURL: "http://127.0.0.1:8080",
-            modelName: "x", authToken: nil)
+            models: ModelTuple(single: "x"), authToken: nil)
         #expect(plan.env["OPENAI_API_BASE"] == "http://127.0.0.1:8080/v1")
         #expect(plan.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8080/v1")
         // Falls back to a placeholder token when none is supplied.
@@ -82,7 +82,7 @@ struct AgentEnvironmentTests {
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "opencode", baseURL: "http://127.0.0.1:8080",
-            modelName: "a", authToken: "secret",
+            models: ModelTuple(single: "a"), authToken: "secret",
             installedModels: installed)
         let inline = plan.env["OPENCODE_CONFIG_CONTENT"]
         #expect(inline != nil)
@@ -115,7 +115,7 @@ struct AgentEnvironmentTests {
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "pi", baseURL: "http://127.0.0.1:8080",
-            modelName: "b", authToken: "secret",
+            models: ModelTuple(single: "b"), authToken: "secret",
             installedModels: installed)
         #expect(plan.executable == "pi")
         // PI_CODING_AGENT_DIR points away from the user's real ~/.pi/agent
@@ -152,7 +152,7 @@ struct AgentEnvironmentTests {
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "crush", baseURL: "http://127.0.0.1:8080",
-            modelName: "m1", authToken: "tok",
+            models: ModelTuple(single: "m1"), authToken: "tok",
             installedModels: installed)
         #expect(plan.executable == "crush")
         // CRUSH_GLOBAL_CONFIG points at the config *directory*, not the
@@ -183,7 +183,93 @@ struct AgentEnvironmentTests {
         #expect(throws: AgentEnvironment.ResolveError.self) {
             _ = try AgentEnvironment.plan(
                 agentName: "doesnotexist",
-                baseURL: "x", modelName: "y", authToken: nil)
+                baseURL: "x", models: ModelTuple(single: "y"), authToken: nil)
         }
+    }
+
+    // MARK: - Three-tier wiring per agent
+
+    /// A three-tier tuple where each tier carries a recognisable string
+    /// so tests can assert which tier landed where.
+    private static let tieredTuple = ModelTuple(
+        smart: "S-smart", fast: "F-fast", small: "T-small")
+
+    @Test func claudePlanWiresThreeTierEnvVars() throws {
+        let plan = try AgentEnvironment.plan(
+            agentName: "claude", baseURL: "http://localhost:8080",
+            models: Self.tieredTuple, authToken: "tok")
+        // The three native Claude Code override env vars line up with the
+        // smart/fast/small tiers per Claude Code's model-config docs.
+        #expect(plan.env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "S-smart")
+        #expect(plan.env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "F-fast")
+        #expect(plan.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "T-small")
+        // ANTHROPIC_SMALL_FAST_MODEL is the deprecated alias for haiku —
+        // setting both survives version skew between Claude Code releases.
+        #expect(plan.env["ANTHROPIC_SMALL_FAST_MODEL"] == "T-small")
+        // ANTHROPIC_MODEL is the top-level "default tier" choice — we
+        // point it at `fast` (= sonnet) so the /model picker opens on
+        // the user's mid-tier pick, matching claude's own default.
+        #expect(plan.env["ANTHROPIC_MODEL"] == "F-fast")
+    }
+
+    @Test func aiderPlanWiresThreeTierFlags() throws {
+        let plan = try AgentEnvironment.plan(
+            agentName: "aider", baseURL: "http://localhost:8080",
+            models: Self.tieredTuple, authToken: nil)
+        // aider's three CLI flags map 1:1 onto our tiers:
+        //   --model         smart  (main editing model)
+        //   --editor-model  fast   (diff-generation)
+        //   --weak-model    small  (commit messages / history summaries)
+        let args = plan.prefixArgs
+        #expect(args.contains("--model"))
+        #expect(args.contains("S-smart"))
+        #expect(args.contains("--editor-model"))
+        #expect(args.contains("F-fast"))
+        #expect(args.contains("--weak-model"))
+        #expect(args.contains("T-small"))
+        // Each flag is followed by its value (positional in argv).
+        if let i = args.firstIndex(of: "--model") {
+            #expect(args[args.index(after: i)] == "S-smart")
+        } else { Issue.record("missing --model") }
+        if let i = args.firstIndex(of: "--weak-model") {
+            #expect(args[args.index(after: i)] == "T-small")
+        } else { Issue.record("missing --weak-model") }
+    }
+
+    @Test func opencodePlanWiresSmartAndSmallModel() throws {
+        let installed = [
+            ModelDescriptor(name: "S-smart", repoId: "x/s", localPath: "/p/s",
+                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(name: "T-small", repoId: "x/t", localPath: "/p/t",
+                            capability: .text, diskSizeBytes: 50, addedAt: Date()),
+        ]
+        let plan = try AgentEnvironment.plan(
+            agentName: "opencode", baseURL: "http://localhost:8080",
+            models: Self.tieredTuple, authToken: "tok", installedModels: installed)
+        let cfg = plan.env["OPENCODE_CONFIG_CONTENT"] ?? ""
+        // Top-level `model` picks the smart tier; `small_model` picks the
+        // small tier. opencode has no middle slot so `fast` doesn't land
+        // anywhere here.
+        #expect(cfg.contains("\"model\": \"smolx/S-smart\""))
+        #expect(cfg.contains("\"small_model\": \"smolx/T-small\""))
+    }
+
+    @Test func crushPlanWiresLargeAndSmallTiers() throws {
+        let installed = [
+            ModelDescriptor(name: "S-smart", repoId: "x/s", localPath: "/p/s",
+                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(name: "T-small", repoId: "x/t", localPath: "/p/t",
+                            capability: .text, diskSizeBytes: 50, addedAt: Date()),
+        ]
+        let plan = try AgentEnvironment.plan(
+            agentName: "crush", baseURL: "http://localhost:8080",
+            models: Self.tieredTuple, authToken: "tok", installedModels: installed)
+        let file = plan.files.first { $0.path.hasSuffix("crush.json") }
+        let cfg = file?.contents ?? ""
+        // Crush's two-slot split lands at the root `models` object —
+        // `large` for our smart tier, `small` for our small tier. The
+        // `fast` tier has no native home on crush.
+        #expect(cfg.contains("\"large\": { \"model\": \"S-smart\""))
+        #expect(cfg.contains("\"small\": { \"model\": \"T-small\""))
     }
 }

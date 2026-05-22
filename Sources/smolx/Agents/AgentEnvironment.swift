@@ -66,7 +66,7 @@ enum AgentEnvironment {
     static func plan(
         agentName: String,
         baseURL: String,
-        modelName: String,
+        models: ModelTuple,
         authToken: String?,
         installedModels: [ModelDescriptor] = []
     ) throws -> Plan {
@@ -86,6 +86,16 @@ enum AgentEnvironment {
             // under ~/.smolx/ that's isolated from the user's regular
             // Claude install. Settings made there persist across smolx
             // runs but never see the real-Anthropic creds.
+            //
+            // Tier mapping (per Claude Code's model-config docs):
+            //   smart → ANTHROPIC_DEFAULT_OPUS_MODEL   (highest tier alias)
+            //   fast  → ANTHROPIC_DEFAULT_SONNET_MODEL (default tier alias)
+            //   small → ANTHROPIC_DEFAULT_HAIKU_MODEL  (background-task alias)
+            //         + ANTHROPIC_SMALL_FAST_MODEL    (legacy name, still
+            //                                          honoured for version-skew safety)
+            // ANTHROPIC_MODEL is set to the `fast` value so claude's `/model`
+            // picker opens on the user's mid-tier choice (claude's own default
+            // selection is `sonnet`, which our `fast` tier overrides).
             let configDir = Paths.appRoot
                 .appendingPathComponent("claude-config", isDirectory: true).path
             return Plan(
@@ -93,7 +103,11 @@ enum AgentEnvironment {
                 env: [
                     "ANTHROPIC_BASE_URL": baseURL,
                     "ANTHROPIC_AUTH_TOKEN": token,
-                    "ANTHROPIC_MODEL": modelName,
+                    "ANTHROPIC_MODEL": models.fast,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": models.smart,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": models.fast,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": models.small,
+                    "ANTHROPIC_SMALL_FAST_MODEL": models.small,
                     "CLAUDE_CONFIG_DIR": configDir,
                 ],
                 unsetEnv: ["ANTHROPIC_API_KEY"],
@@ -107,6 +121,10 @@ enum AgentEnvironment {
             // its own state under `[projects.*]` and `[tui.*]`). `-c` flags
             // are applied AFTER config-file loading and can't be erased by
             // that rewrite, so the local provider stays pinned every run.
+            //
+            // codex has no native fast/small split — its "fast" knob is a
+            // service_tier, not a separate model. We use only `models.smart`
+            // here and ignore the other tiers.
             let codexHome = Paths.appRoot
                 .appendingPathComponent("codex-home", isDirectory: true).path
             let authJson = """
@@ -128,7 +146,7 @@ enum AgentEnvironment {
             // identifier-validation surprises.
             let providerId = "smolx"
             let prefix: [String] = [
-                "-c", "model=\"\(modelName)\"",
+                "-c", "model=\"\(models.smart)\"",
                 "-c", "model_provider=\"\(providerId)\"",
                 "-c", "model_providers.\(providerId).name=\"smolx\"",
                 "-c", "model_providers.\(providerId).base_url=\"\(baseURL)/v1\"",
@@ -149,12 +167,24 @@ enum AgentEnvironment {
         case .aider:
             // aider reads OPENAI_API_BASE (legacy) for compatibility — we set
             // both so aider works regardless of its internal preference.
+            //
+            // aider has a three-way native split via CLI flags:
+            //   --model           main / coding model      (smart)
+            //   --editor-model    diff-generation model    (fast)
+            //   --weak-model      commit-message / summary (small)
+            // Pin all three via prefixArgs so the resolved tuple lands
+            // unambiguously regardless of any .aider.conf.yml the user has.
             return Plan(
                 executable: "aider",
                 env: [
                     "OPENAI_API_BASE": baseURL + "/v1",
                     "OPENAI_BASE_URL": baseURL + "/v1",
                     "OPENAI_API_KEY": token,
+                ],
+                prefixArgs: [
+                    "--model", models.smart,
+                    "--editor-model", models.fast,
+                    "--weak-model", models.small,
                 ],
                 files: [])
         case .opencode:
@@ -170,12 +200,13 @@ enum AgentEnvironment {
             //
             // The model entries MUST include `limit.context` and `limit.output`
             // — those are required by opencode's schema and the entire
-            // provider gets silently dropped from the UI if they're missing
-            // (this is the bug the user reported as "opencode only shows
-            // OpenCode Zen and OpenAI"). We use 32K context / 4K output as
-            // a sensible default; users can override per-model later.
+            // provider gets silently dropped from the UI if they're missing.
+            // We use 32K context / 4K output as sensible defaults.
+            //
+            // Tier mapping: top-level `model` = smart, top-level `small_model`
+            // = small. Opencode has no middle slot so `fast` is unused here.
             let modelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: modelName, repoId: "", localPath: "",
+                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
                                    capability: .text, diskSizeBytes: 0, addedAt: Date())]
                 : installedModels)
             let modelsJSON = modelEntries.map { m in
@@ -193,7 +224,8 @@ enum AgentEnvironment {
             let inlineConfig = """
                 {
                   "$schema": "https://opencode.ai/config.json",
-                  "model": "smolx/\(modelName)",
+                  "model": "smolx/\(models.smart)",
+                  "small_model": "smolx/\(models.small)",
                   "provider": {
                     "smolx": {
                       "npm": "@ai-sdk/openai-compatible",
@@ -220,20 +252,18 @@ enum AgentEnvironment {
             // Pi (pi.dev / @earendil-works/pi-coding-agent) reads providers
             // from ~/.pi/agent/models.json by default. PI_CODING_AGENT_DIR
             // overrides that directory, so we point it at a sandbox under
-            // ~/.smolx/ to avoid touching the user's real Pi state
-            // (skills, sessions, auth.json, the user's own models.json).
+            // ~/.smolx/ to avoid touching the user's real Pi state.
             //
-            // Pi's schema is `providers.<id>` with `api: "openai-completions"`
-            // for OpenAI-compatible servers. We list every installed smolx
-            // model so they appear in Pi's `/model` picker; the one passed
-            // via --model is listed first so it surfaces as the default.
+            // Pi has no native fast/small split — it's a single picker.
+            // We use `models.smart` as the default (listed first); the
+            // other tiers are ignored.
             let piHome = Paths.appRoot
                 .appendingPathComponent("pi-agent", isDirectory: true).path
             let piModelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: modelName, repoId: "", localPath: "",
+                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
                                    capability: .text, diskSizeBytes: 0, addedAt: Date())]
                 : installedModels)
-            let piOrdered = piModelEntries.sorted { a, _ in a.name == modelName }
+            let piOrdered = piModelEntries.sorted { a, _ in a.name == models.smart }
             let piModelsJSON = piOrdered.map { m in
                 let inputs = m.capability == .vision
                     ? "[\"text\", \"image\"]" : "[\"text\"]"
@@ -264,20 +294,25 @@ enum AgentEnvironment {
             // Charm's Crush reads its config from .crush.json (CWD),
             // crush.json (CWD), or $HOME/.config/crush/crush.json. The env
             // var CRUSH_GLOBAL_CONFIG points at the *directory* containing
-            // crush.json (NOT the file itself — Crush appends `/crush.json`
-            // internally; setting it to a file path produces a path like
-            // `…/crush.json/crush.json: not a directory` error). We sandbox
-            // it under ~/.smolx/ and declare smolx as an
-            // `openai-compat` provider with every installed model listed.
+            // crush.json (NOT the file itself).
             //
-            // The model list uses Crush's documented keys (`context_window`,
-            // `default_max_tokens`). Without them Crush either fails to load
-            // the provider or falls back to broken defaults.
+            // Crush has two distinct model-related sections in its config:
+            //   - `providers.<id>.models[]`  — the picker list (what's
+            //                                  available to choose from).
+            //   - `models.large` / `models.small` — explicit tier
+            //                                  assignments that pin which
+            //                                  provider-qualified model id
+            //                                  fills each tier role.
+            //
+            // We populate both: the picker carries all installed models
+            // so the user can switch with `/model`, and the tier
+            // assignments pin our `smart`/`small` choices on launch.
+            // (Crush has no middle slot, so `fast` is unused here.)
             let crushConfigDir = Paths.appRoot
                 .appendingPathComponent("crush", isDirectory: true).path
             let crushConfigPath = crushConfigDir + "/crush.json"
             let crushModelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: modelName, repoId: "", localPath: "",
+                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
                                    capability: .text, diskSizeBytes: 0, addedAt: Date())]
                 : installedModels)
             let crushModelsJSON = crushModelEntries.map { m in
@@ -297,6 +332,10 @@ enum AgentEnvironment {
                 \(crushModelsJSON)
                       ]
                     }
+                  },
+                  "models": {
+                    "large": { "model": "\(models.smart)", "provider": "smolx" },
+                    "small": { "model": "\(models.small)", "provider": "smolx" }
                   }
                 }
                 """

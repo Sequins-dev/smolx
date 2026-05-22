@@ -17,8 +17,17 @@ struct RunCommand: AsyncParsableCommand {
     @Argument(help: "Agent CLI to launch.")
     var agent: String
 
-    @Option(name: .long, help: "Model to use; defaults to the first registered model.")
+    @Option(name: .long, help: "Model to use for ALL tiers (sugar for setting --smart/--fast/--small to the same value). Persisted per-tier config still applies for tiers this doesn't override.")
     var model: String?
+
+    @Option(name: .long, help: "Override the `smart` tier for this invocation only.")
+    var smart: String?
+
+    @Option(name: .long, help: "Override the `fast` tier for this invocation only.")
+    var fast: String?
+
+    @Option(name: .long, help: "Override the `small` tier for this invocation only.")
+    var small: String?
 
     @Option(name: .long, help: "URL of an already-running smolx. Defaults to http://127.0.0.1:8080.")
     var baseUrl: String = "http://127.0.0.1:8080"
@@ -41,15 +50,30 @@ struct RunCommand: AsyncParsableCommand {
     func run() async throws {
         let registry = ModelRegistry()
         let installedModels = (try? registry.load()) ?? []
-        let modelName: String
-        if let m = model {
-            modelName = m
-        } else if let first = installedModels.first?.name {
-            modelName = first
-        } else {
+        let userConfig = (try? UserConfig.load()) ?? UserConfig()
+
+        guard let models = ModelTuple.resolve(
+            config: userConfig,
+            smartOverride: smart,
+            fastOverride: fast,
+            smallOverride: small,
+            modelSugar: model,
+            firstInstalled: installedModels.first?.name)
+        else {
             FileHandle.standardError.write(Data(
                 "No model installed. Use `smolx pull <repo-id>` first, or pass --model.\n".utf8))
             throw ExitCode.failure
+        }
+
+        // Validate every resolved tier exists in the registry — refuse
+        // to launch with a typo'd alias rather than letting the agent
+        // surface "model not found" mid-session.
+        for alias in Set([models.smart, models.fast, models.small]) {
+            if try registry.find(alias) == nil {
+                FileHandle.standardError.write(Data(
+                    "Unknown model alias '\(alias)'. Run `smolx models` to see installed models.\n".utf8))
+                throw ExitCode.failure
+            }
         }
 
         let plan: AgentEnvironment.Plan
@@ -57,7 +81,7 @@ struct RunCommand: AsyncParsableCommand {
             plan = try AgentEnvironment.plan(
                 agentName: agent,
                 baseURL: baseUrl,
-                modelName: modelName,
+                models: models,
                 authToken: authToken,
                 installedModels: installedModels)
         } catch {
