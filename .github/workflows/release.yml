@@ -1,12 +1,24 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.0 — no leading v)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,27 +45,32 @@ jobs:
 
       - name: Stage release artifacts
         id: stage
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
           PRODUCTS="$PWD/build/Build/Products/Release"
           STAGE="$PWD/dist/smolx-${VERSION}-macos-arm64"
           mkdir -p "$STAGE"
           cp     "$PRODUCTS/smolx"                 "$STAGE/smolx"
           cp -R  "$PRODUCTS/mlx-swift_Cmlx.bundle" "$STAGE/mlx-swift_Cmlx.bundle"
-          # Re-sign ad-hoc after the cp — the cp attaches a com.apple.provenance
-          # xattr that flips the kernel's execution-policy decision and SIGKILLs
-          # the binary silently on launch from the moved path. Re-signing makes
+          # Re-sign ad-hoc after cp — cp attaches a com.apple.provenance xattr
+          # that flips the kernel's execution-policy decision and SIGKILLs the
+          # binary silently on launch from the moved path. Re-signing makes
           # the kernel re-evaluate it as locally trusted.
           codesign --force --sign - "$STAGE/smolx"
           ( cd "$PWD/dist" && tar -czf "smolx-${VERSION}-macos-arm64.tar.gz" "smolx-${VERSION}-macos-arm64" )
           shasum -a 256 "$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz" > "$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz.sha256"
-          echo "tarball=$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz"        >> "$GITHUB_OUTPUT"
-          echo "sha=$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz.sha256"     >> "$GITHUB_OUTPUT"
+          echo "tarball=$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz"    >> "$GITHUB_OUTPUT"
+          echo "sha=$PWD/dist/smolx-${VERSION}-macos-arm64.tar.gz.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.prerelease }}
           files: |
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha }}
