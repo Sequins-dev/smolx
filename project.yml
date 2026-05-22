@@ -1,4 +1,4 @@
-# XcodeGen spec for mlx-serve.
+# XcodeGen spec for smolx.
 #
 # Use this when you need to build with Metal shader compilation (i.e. anything
 # that exercises MLX at runtime — loading models, running inference). The
@@ -9,18 +9,18 @@
 #
 # Workflow:
 #   brew install xcodegen          # one-time install
-#   make xcode                     # regenerate mlx-serve.xcodeproj
+#   make xcode                     # regenerate smolx.xcodeproj
 #   make xcode-build               # build via xcodebuild (release config)
-#   open mlx-serve.xcodeproj       # or work in Xcode normally
+#   open smolx.xcodeproj       # or work in Xcode normally
 #
 # Package.swift is the source of truth for everyday `swift build` and `make
 # test`. project.yml duplicates the dependency list because XcodeGen can't
 # parse Package.swift directly; keep them in sync when bumping versions.
 
-name: mlx-serve
+name: smolx
 
 options:
-  bundleIdPrefix: dev.mlxserve
+  bundleIdPrefix: dev.smolx
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
@@ -65,11 +65,11 @@ packages:
     from: "1.3.0"
 
 targets:
-  mlx-serve:
+  smolx:
     type: tool
     platform: macOS
     sources:
-      - path: Sources/mlx-serve
+      - path: Sources/smolx
         excludes:
           - "**/.DS_Store"
     dependencies:
@@ -102,10 +102,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: "NO"
 
 schemes:
-  mlx-serve:
+  smolx:
     build:
       targets:
-        mlx-serve: all
+        smolx: all
     run:
       config: Debug
     test:

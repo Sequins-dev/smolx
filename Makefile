@@ -8,8 +8,8 @@ TEST_FLAGS := \
 	-Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) \
 	-Xlinker -rpath -Xlinker $(CLT_LIBS)
 
-XCODE_PROJECT := mlx-serve.xcodeproj
-XCODE_SCHEME  := mlx-serve
+XCODE_PROJECT := smolx.xcodeproj
+XCODE_SCHEME  := smolx
 XCODE_CONFIG  := Release
 XCODE_BUILD_DIR := $(CURDIR)/build
 
@@ -26,7 +26,7 @@ test:
 	swift test $(TEST_FLAGS)
 
 run:
-	swift run mlx-serve $(ARGS)
+	swift run smolx $(ARGS)
 
 clean:
 	rm -rf .build $(XCODE_PROJECT) $(XCODE_BUILD_DIR)
@@ -75,13 +75,13 @@ INSTALL_DIR ?= $(HOME)/.local/bin
 install: xcode-build
 	@mkdir -p $(INSTALL_DIR)
 	@PRODUCTS=$(XCODE_BUILD_DIR)/Build/Products/$(XCODE_CONFIG); \
-		BIN="$$PRODUCTS/mlx-serve"; \
+		BIN="$$PRODUCTS/smolx"; \
 		BUNDLE="$$PRODUCTS/mlx-swift_Cmlx.bundle"; \
 		test -x "$$BIN"     || { echo "Missing built binary at $$BIN";          exit 1; }; \
 		test -d "$$BUNDLE"  || { echo "Missing metallib bundle at $$BUNDLE";    exit 1; }; \
-		cp     "$$BIN"        "$(INSTALL_DIR)/mlx-serve"; \
+		cp     "$$BIN"        "$(INSTALL_DIR)/smolx"; \
 		rm -rf "$(INSTALL_DIR)/mlx-swift_Cmlx.bundle"; \
 		cp -R  "$$BUNDLE"     "$(INSTALL_DIR)/mlx-swift_Cmlx.bundle"; \
-		codesign --force --sign - "$(INSTALL_DIR)/mlx-serve" >/dev/null 2>&1; \
-		echo "Installed: $(INSTALL_DIR)/mlx-serve"; \
+		codesign --force --sign - "$(INSTALL_DIR)/smolx" >/dev/null 2>&1; \
+		echo "Installed: $(INSTALL_DIR)/smolx"; \
 		echo "           $(INSTALL_DIR)/mlx-swift_Cmlx.bundle"

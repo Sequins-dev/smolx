@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "mlx-serve",
+    name: "smolx",
     platforms: [
         .macOS(.v14),
     ],
@@ -18,7 +18,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "mlx-serve",
+            name: "smolx",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
@@ -33,8 +33,8 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "mlx-serveTests",
-            dependencies: ["mlx-serve"]
+            name: "smolxTests",
+            dependencies: ["smolx"]
         ),
     ],
     swiftLanguageModes: [.v6]
