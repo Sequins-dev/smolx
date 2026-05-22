@@ -97,7 +97,8 @@ enum PromptBuilder {
         let enc = JSONEncoder()
         enc.outputFormatting = [.withoutEscapingSlashes]
         guard let data = try? enc.encode(v),
-              let str = String(data: data, encoding: .utf8) else {
+            let str = String(data: data, encoding: .utf8)
+        else {
             return "{}"
         }
         return str

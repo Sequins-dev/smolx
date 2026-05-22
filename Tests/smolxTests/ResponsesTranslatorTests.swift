@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("Responses translator")
@@ -9,8 +10,8 @@ struct ResponsesTranslatorTests {
 
     @Test func decodeStringInputBecomesUserMessage() throws {
         let json = #"""
-        {"model":"foo","input":"hello world"}
-        """#
+            {"model":"foo","input":"hello world"}
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -24,8 +25,8 @@ struct ResponsesTranslatorTests {
 
     @Test func decodeInstructionsBecomesSystemMessage() throws {
         let json = #"""
-        {"model":"foo","instructions":"You are terse.","input":"hi"}
-        """#
+            {"model":"foo","instructions":"You are terse.","input":"hi"}
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -37,15 +38,15 @@ struct ResponsesTranslatorTests {
 
     @Test func decodeArrayInputWithMessageItems() throws {
         let json = #"""
-        {
-          "model": "foo",
-          "input": [
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
-            {"type":"message","role":"assistant","content":[{"type":"input_text","text":"reply"}]},
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}
-          ]
-        }
-        """#
+            {
+              "model": "foo",
+              "input": [
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+                {"type":"message","role":"assistant","content":[{"type":"input_text","text":"reply"}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}
+              ]
+            }
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -60,15 +61,15 @@ struct ResponsesTranslatorTests {
         // becomes a tool-role message. This is what codex sends back when
         // resuming a multi-turn agent loop.
         let json = #"""
-        {
-          "model": "foo",
-          "input": [
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"ls"}]},
-            {"type":"function_call","call_id":"call_abc","name":"shell","arguments":"{\"cmd\":\"ls\"}"},
-            {"type":"function_call_output","call_id":"call_abc","output":"a.txt\nb.txt"}
-          ]
-        }
-        """#
+            {
+              "model": "foo",
+              "input": [
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"ls"}]},
+                {"type":"function_call","call_id":"call_abc","name":"shell","arguments":"{\"cmd\":\"ls\"}"},
+                {"type":"function_call_output","call_id":"call_abc","output":"a.txt\nb.txt"}
+              ]
+            }
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -100,14 +101,14 @@ struct ResponsesTranslatorTests {
         // must NOT fail the whole request when call_id and name are absent;
         // the item is silently dropped (becomes `.other`).
         let json = #"""
-        {
-          "model":"foo",
-          "input":[
-            {"type":"function_call"},
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}
-          ]
-        }
-        """#
+            {
+              "model":"foo",
+              "input":[
+                {"type":"function_call"},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}
+              ]
+            }
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -121,15 +122,15 @@ struct ResponsesTranslatorTests {
         // without a name — translation must drop them so the model only
         // sees real function tools.
         let json = #"""
-        {
-          "model":"foo",
-          "input":"hi",
-          "tools":[
-            {"type":"local_shell"},
-            {"type":"function","name":"read_file","description":"read","parameters":{"type":"object"}}
-          ]
-        }
-        """#
+            {
+              "model":"foo",
+              "input":"hi",
+              "tools":[
+                {"type":"local_shell"},
+                {"type":"function","name":"read_file","description":"read","parameters":{"type":"object"}}
+              ]
+            }
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -139,8 +140,8 @@ struct ResponsesTranslatorTests {
 
     @Test func decodeStreamFlagAndGenerationParams() throws {
         let json = #"""
-        {"model":"foo","input":"hi","stream":true,"temperature":0.3,"top_p":0.9,"max_output_tokens":128}
-        """#
+            {"model":"foo","input":"hi","stream":true,"temperature":0.3,"top_p":0.9,"max_output_tokens":128}
+            """#
         let req = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(json.utf8))
         let dec = try ResponsesTranslator.decode(req)
@@ -155,11 +156,13 @@ struct ResponsesTranslatorTests {
         let autoJSON = #"{"model":"f","input":"x","tool_choice":"auto"}"#
         let reqAuto = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(autoJSON.utf8))
-        if case .auto = try ResponsesTranslator.decode(reqAuto).toolChoice {} else {
+        if case .auto = try ResponsesTranslator.decode(reqAuto).toolChoice {
+        } else {
             Issue.record("expected auto")
         }
 
-        let specificJSON = #"{"model":"f","input":"x","tool_choice":{"type":"function","name":"read_file"}}"#
+        let specificJSON =
+            #"{"model":"f","input":"x","tool_choice":{"type":"function","name":"read_file"}}"#
         let reqSpec = try JSONDecoder().decode(
             OpenAIResponses.Request.self, from: Data(specificJSON.utf8))
         if case .specific(let n) = try ResponsesTranslator.decode(reqSpec).toolChoice {
@@ -198,15 +201,16 @@ struct ResponsesTranslatorTests {
         let names = frames.map(\.event)
         // Lifecycle: created → output_item.added (the message) →
         // output_text.delta ×3 → output_item.done → response.completed
-        #expect(names == [
-            "response.created",
-            "response.output_item.added",
-            "response.output_text.delta",
-            "response.output_text.delta",
-            "response.output_text.delta",
-            "response.output_item.done",
-            "response.completed",
-        ])
+        #expect(
+            names == [
+                "response.created",
+                "response.output_item.added",
+                "response.output_text.delta",
+                "response.output_text.delta",
+                "response.output_text.delta",
+                "response.output_item.done",
+                "response.completed",
+            ])
     }
 
     @Test func textOnlyStreamSequenceNumbersAreMonotonic() throws {
@@ -234,20 +238,22 @@ struct ResponsesTranslatorTests {
             .done(finishReason: .toolCalls, usage: nil),
         ])
         let names = frames.map(\.event)
-        #expect(names == [
-            "response.created",
-            "response.output_item.added",
-            "response.custom_tool_call_input.delta",
-            "response.custom_tool_call_input.delta",
-            "response.output_item.done",
-            "response.completed",
-        ])
+        #expect(
+            names == [
+                "response.created",
+                "response.output_item.added",
+                "response.custom_tool_call_input.delta",
+                "response.custom_tool_call_input.delta",
+                "response.output_item.done",
+                "response.completed",
+            ])
 
         // The completed output items must include the assembled function_call
         // with the FULL concatenated arguments string — that's what codex
         // reads off `response.completed` if it missed the streamed deltas.
-        guard case .functionCall(_, let callId, let name, let args, let status)
-                = state.completedOutput.first
+        guard
+            case .functionCall(_, let callId, let name, let args, let status) = state.completedOutput
+                .first
         else {
             Issue.record("expected function_call as first completed item")
             return
@@ -270,20 +276,21 @@ struct ResponsesTranslatorTests {
             .done(finishReason: .toolCalls, usage: nil),
         ])
         let names = frames.map(\.event)
-        #expect(names == [
-            "response.created",
-            "response.output_item.added",          // message
-            "response.output_text.delta",
-            "response.output_item.done",           // message closes here
-            "response.output_item.added",          // function_call
-            "response.custom_tool_call_input.delta",
-            "response.output_item.done",           // function_call closes
-            "response.completed",
-        ])
+        #expect(
+            names == [
+                "response.created",
+                "response.output_item.added",  // message
+                "response.output_text.delta",
+                "response.output_item.done",  // message closes here
+                "response.output_item.added",  // function_call
+                "response.custom_tool_call_input.delta",
+                "response.output_item.done",  // function_call closes
+                "response.completed",
+            ])
         // Two completed items: message then function_call, in that order.
         #expect(state.completedOutput.count == 2)
         guard case .message = state.completedOutput[0],
-              case .functionCall = state.completedOutput[1]
+            case .functionCall = state.completedOutput[1]
         else {
             Issue.record("wrong order of completed output items")
             return
@@ -301,19 +308,20 @@ struct ResponsesTranslatorTests {
             .done(finishReason: .stop, usage: nil),
         ])
         let names = frames.map(\.event)
-        #expect(names == [
-            "response.created",
-            "response.output_item.added",          // function_call
-            "response.custom_tool_call_input.delta",
-            "response.output_item.done",           // function_call closes
-            "response.output_item.added",          // message
-            "response.output_text.delta",
-            "response.output_item.done",           // message closes
-            "response.completed",
-        ])
+        #expect(
+            names == [
+                "response.created",
+                "response.output_item.added",  // function_call
+                "response.custom_tool_call_input.delta",
+                "response.output_item.done",  // function_call closes
+                "response.output_item.added",  // message
+                "response.output_text.delta",
+                "response.output_item.done",  // message closes
+                "response.completed",
+            ])
         #expect(state.completedOutput.count == 2)
         guard case .functionCall = state.completedOutput[0],
-              case .message = state.completedOutput[1]
+            case .message = state.completedOutput[1]
         else {
             Issue.record("wrong order of completed output items")
             return
@@ -362,9 +370,11 @@ struct ResponsesTranslatorTests {
             .toolUseStop,
             .done(finishReason: .toolCalls, usage: nil),
         ])
-        guard let deltaFrame = frames.first(where: {
-            $0.event == "response.custom_tool_call_input.delta"
-        }) else {
+        guard
+            let deltaFrame = frames.first(where: {
+                $0.event == "response.custom_tool_call_input.delta"
+            })
+        else {
             Issue.record("no delta frame")
             return
         }

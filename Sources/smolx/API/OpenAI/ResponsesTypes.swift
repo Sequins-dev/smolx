@@ -50,7 +50,10 @@ enum OpenAIResponses {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
-            if let s = try? c.decode(String.self) { self = .text(s); return }
+            if let s = try? c.decode(String.self) {
+                self = .text(s)
+                return
+            }
             self = .items(try c.decode([InputItem].self))
         }
 
@@ -204,10 +207,18 @@ enum OpenAIResponses {
             let c = try decoder.singleValueContainer()
             if let s = try? c.decode(String.self) {
                 switch s {
-                case "auto": self = .auto; return
-                case "required": self = .required; return
-                case "none": self = .none; return
-                default: self = .auto; return
+                case "auto":
+                    self = .auto
+                    return
+                case "required":
+                    self = .required
+                    return
+                case "none":
+                    self = .none
+                    return
+                default:
+                    self = .auto
+                    return
                 }
             }
             // Object form: {"type":"function","name":"foo"}
@@ -343,13 +354,13 @@ enum OpenAIResponses {
     /// duplicates the event name (codex parses by `type`, the `event:` line
     /// is convention).
     enum EventName: String, Sendable {
-        case created                 = "response.created"
-        case outputItemAdded         = "response.output_item.added"
-        case outputItemDone          = "response.output_item.done"
-        case outputTextDelta         = "response.output_text.delta"
+        case created = "response.created"
+        case outputItemAdded = "response.output_item.added"
+        case outputItemDone = "response.output_item.done"
+        case outputTextDelta = "response.output_text.delta"
         case customToolCallInputDelta = "response.custom_tool_call_input.delta"
-        case completed               = "response.completed"
-        case failed                  = "response.failed"
+        case completed = "response.completed"
+        case failed = "response.failed"
     }
 
     struct CreatedEvent: Encodable, Sendable {

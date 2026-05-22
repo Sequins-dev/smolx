@@ -116,7 +116,7 @@ enum OpenAITranslator {
 
     private static func parseArguments(_ s: String) -> JSONValue {
         guard let data = s.data(using: .utf8),
-              let value = try? JSONDecoder().decode(JSONValue.self, from: data)
+            let value = try? JSONDecoder().decode(JSONValue.self, from: data)
         else { return .object([:]) }
         return value
     }
@@ -190,10 +190,12 @@ enum OpenAITranslator {
                 function: .init(name: name, arguments: ""))
             return OpenAI.ChatCompletionChunk(
                 id: id, created: created, model: model,
-                choices: [.init(
-                    index: 0,
-                    delta: .init(role: isFirst ? "assistant" : nil, content: nil, toolCalls: [tc]),
-                    finishReason: nil)])
+                choices: [
+                    .init(
+                        index: 0,
+                        delta: .init(role: isFirst ? "assistant" : nil, content: nil, toolCalls: [tc]),
+                        finishReason: nil)
+                ])
         case .toolUseInputDelta(let chunk):
             guard let idx = state.activeToolIndex else { return nil }
             let tc = OpenAI.ChunkToolCall(
@@ -201,10 +203,12 @@ enum OpenAITranslator {
                 function: .init(name: nil, arguments: chunk))
             return OpenAI.ChatCompletionChunk(
                 id: id, created: created, model: model,
-                choices: [.init(
-                    index: 0,
-                    delta: .init(role: nil, content: nil, toolCalls: [tc]),
-                    finishReason: nil)])
+                choices: [
+                    .init(
+                        index: 0,
+                        delta: .init(role: nil, content: nil, toolCalls: [tc]),
+                        finishReason: nil)
+                ])
         case .toolUseStop:
             state.activeToolIndex = nil
             return nil
@@ -217,10 +221,12 @@ enum OpenAITranslator {
             }
             return OpenAI.ChatCompletionChunk(
                 id: id, created: created, model: model,
-                choices: [.init(
-                    index: 0,
-                    delta: .init(role: nil, content: nil, toolCalls: nil),
-                    finishReason: reason.openAIWire)],
+                choices: [
+                    .init(
+                        index: 0,
+                        delta: .init(role: nil, content: nil, toolCalls: nil),
+                        finishReason: reason.openAIWire)
+                ],
                 usage: usageOut)
         }
     }

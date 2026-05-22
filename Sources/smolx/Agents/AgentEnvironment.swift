@@ -58,7 +58,8 @@ enum AgentEnvironment {
         var description: String {
             switch self {
             case .unknownAgent(let n):
-                return "Unknown agent: \(n). Supported: \(Kind.allCases.map(\.rawValue).joined(separator: ", "))"
+                return
+                    "Unknown agent: \(n). Supported: \(Kind.allCases.map(\.rawValue).joined(separator: ", "))"
             }
         }
     }
@@ -205,10 +206,14 @@ enum AgentEnvironment {
             //
             // Tier mapping: top-level `model` = smart, top-level `small_model`
             // = small. Opencode has no middle slot so `fast` is unused here.
-            let modelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
-                                   capability: .text, diskSizeBytes: 0, addedAt: Date())]
-                : installedModels)
+            let modelEntries =
+                (installedModels.isEmpty
+                    ? [
+                        ModelDescriptor(
+                            name: models.smart, repoId: "", localPath: "",
+                            capability: .text, diskSizeBytes: 0, addedAt: Date())
+                    ]
+                    : installedModels)
             let modelsJSON = modelEntries.map { m in
                 """
                   "\(m.name)": {
@@ -242,7 +247,8 @@ enum AgentEnvironment {
                 }
                 """
             // Collapse to one line so the env-var value stays single-line.
-            let oneLineConfig = inlineConfig
+            let oneLineConfig =
+                inlineConfig
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "  ", with: " ")
             return Plan(
@@ -259,13 +265,18 @@ enum AgentEnvironment {
             // other tiers are ignored.
             let piHome = Paths.appRoot
                 .appendingPathComponent("pi-agent", isDirectory: true).path
-            let piModelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
-                                   capability: .text, diskSizeBytes: 0, addedAt: Date())]
-                : installedModels)
+            let piModelEntries =
+                (installedModels.isEmpty
+                    ? [
+                        ModelDescriptor(
+                            name: models.smart, repoId: "", localPath: "",
+                            capability: .text, diskSizeBytes: 0, addedAt: Date())
+                    ]
+                    : installedModels)
             let piOrdered = piModelEntries.sorted { a, _ in a.name == models.smart }
             let piModelsJSON = piOrdered.map { m in
-                let inputs = m.capability == .vision
+                let inputs =
+                    m.capability == .vision
                     ? "[\"text\", \"image\"]" : "[\"text\"]"
                 return """
                           { "id": "\(m.name)", "name": "\(m.name)", "input": \(inputs), "contextWindow": 32768, "maxTokens": 4096 }
@@ -288,8 +299,11 @@ enum AgentEnvironment {
             return Plan(
                 executable: "pi",
                 env: ["PI_CODING_AGENT_DIR": piHome],
-                files: [.init(path: piHome + "/models.json",
-                              contents: piModelsConfig)])
+                files: [
+                    .init(
+                        path: piHome + "/models.json",
+                        contents: piModelsConfig)
+                ])
         case .crush:
             // Charm's Crush reads its config from .crush.json (CWD),
             // crush.json (CWD), or $HOME/.config/crush/crush.json. The env
@@ -311,14 +325,18 @@ enum AgentEnvironment {
             let crushConfigDir = Paths.appRoot
                 .appendingPathComponent("crush", isDirectory: true).path
             let crushConfigPath = crushConfigDir + "/crush.json"
-            let crushModelEntries = (installedModels.isEmpty
-                ? [ModelDescriptor(name: models.smart, repoId: "", localPath: "",
-                                   capability: .text, diskSizeBytes: 0, addedAt: Date())]
-                : installedModels)
+            let crushModelEntries =
+                (installedModels.isEmpty
+                    ? [
+                        ModelDescriptor(
+                            name: models.smart, repoId: "", localPath: "",
+                            capability: .text, diskSizeBytes: 0, addedAt: Date())
+                    ]
+                    : installedModels)
             let crushModelsJSON = crushModelEntries.map { m in
                 """
-                          { "id": "\(m.name)", "name": "\(m.name)", "context_window": 32768, "default_max_tokens": 4096 }
-                    """
+                      { "id": "\(m.name)", "name": "\(m.name)", "context_window": 32768, "default_max_tokens": 4096 }
+                """
             }.joined(separator: ",\n")
             let crushConfig = """
                 {

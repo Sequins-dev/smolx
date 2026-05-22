@@ -1,13 +1,14 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("OpenAI translator")
 struct OpenAITranslatorTests {
     @Test func decodeSimpleTextRequest() throws {
         let json = """
-        {"model":"foo","messages":[{"role":"user","content":"hi"}]}
-        """
+            {"model":"foo","messages":[{"role":"user","content":"hi"}]}
+            """
         let req = try JSONDecoder().decode(
             OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
         let dec = try OpenAITranslator.decode(req)
@@ -21,17 +22,17 @@ struct OpenAITranslatorTests {
     @Test func decodeMultiPartContentWithImage() throws {
         let pngB64 = Data([137, 80, 78, 71]).base64EncodedString()  // PNG magic
         let json = """
-        {
-          "model": "qwen-vl",
-          "messages": [{
-            "role": "user",
-            "content": [
-              {"type":"text","text":"what is here"},
-              {"type":"image_url","image_url":{"url":"data:image/png;base64,\(pngB64)"}}
-            ]
-          }]
-        }
-        """
+            {
+              "model": "qwen-vl",
+              "messages": [{
+                "role": "user",
+                "content": [
+                  {"type":"text","text":"what is here"},
+                  {"type":"image_url","image_url":{"url":"data:image/png;base64,\(pngB64)"}}
+                ]
+              }]
+            }
+            """
         let req = try JSONDecoder().decode(
             OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
         let dec = try OpenAITranslator.decode(req)
@@ -87,21 +88,21 @@ struct OpenAITranslatorTests {
 struct AnthropicTranslatorTests {
     @Test func decodeWithSystemAndToolUse() throws {
         let json = """
-        {
-          "model": "claude-x",
-          "max_tokens": 64,
-          "system": "Be brief.",
-          "messages": [
-            {"role":"user","content":[{"type":"text","text":"hi"}]},
-            {"role":"assistant","content":[
-              {"type":"tool_use","id":"toolu_1","name":"add","input":{"a":1,"b":2}}
-            ]},
-            {"role":"user","content":[
-              {"type":"tool_result","tool_use_id":"toolu_1","content":"3"}
-            ]}
-          ]
-        }
-        """
+            {
+              "model": "claude-x",
+              "max_tokens": 64,
+              "system": "Be brief.",
+              "messages": [
+                {"role":"user","content":[{"type":"text","text":"hi"}]},
+                {"role":"assistant","content":[
+                  {"type":"tool_use","id":"toolu_1","name":"add","input":{"a":1,"b":2}}
+                ]},
+                {"role":"user","content":[
+                  {"type":"tool_result","tool_use_id":"toolu_1","content":"3"}
+                ]}
+              ]
+            }
+            """
         let req = try JSONDecoder().decode(
             Anthropic.MessagesRequest.self, from: Data(json.utf8))
         let dec = try AnthropicTranslator.decode(req)

@@ -99,8 +99,12 @@ final class ProgressRenderer: @unchecked Sendable {
             if i < toShow.count {
                 line = slotLine(toShow[i], cols: cols)
             } else {
-                let cached = snap.files.filter { if case .cached = $0.state { return true } else { return false } }.count
-                let done = snap.files.filter { if case .completed = $0.state { return true } else { return false } }.count
+                let cached = snap.files.filter {
+                    if case .cached = $0.state { return true } else { return false }
+                }.count
+                let done = snap.files.filter {
+                    if case .completed = $0.state { return true } else { return false }
+                }.count
                 let total = snap.files.count
                 line = "  · " + ((cached + done == total && total > 0) ? "all done" : "(idle)")
             }
@@ -125,12 +129,14 @@ final class ProgressRenderer: @unchecked Sendable {
     private var repoIntroLine: String { "Downloading \(repoId)" }
 
     private func summaryLine(_ snap: ProgressSnapshot, cols: Int) -> String {
-        let pct = snap.totalBytes > 0
+        let pct =
+            snap.totalBytes > 0
             ? Int(Double(snap.completedBytes) / Double(snap.totalBytes) * 100)
             : 0
         let mbps = String(format: "%.1f MB/s", snap.mbps)
         let eta = etaString(snap)
-        let resume = snap.resumedFromBytes > 0
+        let resume =
+            snap.resumedFromBytes > 0
             ? " · resumed from \(formatBytes(snap.resumedFromBytes))"
             : ""
         return "  [\(bar(percent: pct, width: 20))] \(pct)% · "
@@ -151,7 +157,8 @@ final class ProgressRenderer: @unchecked Sendable {
         case .downloading(let bytes, let total, let resumed):
             icon = (resumed ?? 0) > 0 ? "  ↻ " : "  ▸ "
             let pct = total > 0 ? Int(Double(bytes) / Double(total) * 100) : 0
-            trailing = "[\(bar(percent: pct, width: 10))] \(pct)%  "
+            trailing =
+                "[\(bar(percent: pct, width: 10))] \(pct)%  "
                 + "\(formatBytes(bytes)) / \(formatBytes(total))"
         case .retrying(_, _, let attempt, let delay):
             icon = "  ⟳ "
@@ -204,9 +211,13 @@ final class ProgressRenderer: @unchecked Sendable {
         let elapsed = stoppedAt?.timeIntervalSince(snap.startedAt) ?? 0
         let elapsedString = formatDuration(elapsed)
         if success {
-            writeStderr("Downloaded \(snap.files.count) files (\(formatBytes(snap.totalBytes))) in \(elapsedString)\n")
+            writeStderr(
+                "Downloaded \(snap.files.count) files (\(formatBytes(snap.totalBytes))) in \(elapsedString)\n"
+            )
         } else {
-            let failed = snap.files.filter { if case .failed = $0.state { return true } else { return false } }
+            let failed = snap.files.filter {
+                if case .failed = $0.state { return true } else { return false }
+            }
             if failed.isEmpty {
                 writeStderr("Download interrupted after \(elapsedString)\n")
             } else {
@@ -234,7 +245,7 @@ final class ProgressRenderer: @unchecked Sendable {
         guard seconds.isFinite, seconds >= 0 else { return "—" }
         let s = Int(seconds.rounded())
         if s >= 3600 { return String(format: "%dh%02dm", s / 3600, (s % 3600) / 60) }
-        if s >= 60   { return String(format: "%dm%02ds", s / 60, s % 60) }
+        if s >= 60 { return String(format: "%dm%02ds", s / 60, s % 60) }
         return "\(s)s"
     }
 
@@ -281,9 +292,9 @@ private enum TerminalWidth {
     }
 }
 
-private extension FileProgressState {
+extension FileProgressState {
     /// Lower value = higher render priority (more interesting state).
-    var priority: Int {
+    fileprivate var priority: Int {
         switch self {
         case .downloading: return 0
         case .retrying: return 1

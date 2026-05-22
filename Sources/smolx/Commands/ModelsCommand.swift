@@ -34,11 +34,12 @@ struct ModelsCommand: AsyncParsableCommand {
         // soon as it has actual non-empty content to format.
         print(Self.row(name: "NAME", type: "TYPE", size: "SIZE", repo: "REPO"))
         for m in models {
-            print(Self.row(
-                name: m.name,
-                type: m.capability.rawValue,
-                size: PullCommand.formatBytes(m.diskSizeBytes),
-                repo: m.repoId))
+            print(
+                Self.row(
+                    name: m.name,
+                    type: m.capability.rawValue,
+                    size: PullCommand.formatBytes(m.diskSizeBytes),
+                    repo: m.repoId))
         }
     }
 

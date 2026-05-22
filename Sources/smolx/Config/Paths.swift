@@ -42,7 +42,8 @@ enum Paths {
             return URL(fileURLWithPath: hfHome, isDirectory: true)
                 .appendingPathComponent("hub", isDirectory: true)
         }
-        return home
+        return
+            home
             .appendingPathComponent(".cache", isDirectory: true)
             .appendingPathComponent("huggingface", isDirectory: true)
             .appendingPathComponent("hub", isDirectory: true)

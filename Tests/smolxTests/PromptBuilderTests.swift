@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("PromptBuilder")
@@ -24,8 +25,9 @@ struct PromptBuilderTests {
     }
 
     @Test func assistantWithToolCallProducesStructuredCalls() {
-        let toolUse = ToolUse(id: "call_abc", name: "get_weather",
-                              input: .object(["location": .string("SF")]))
+        let toolUse = ToolUse(
+            id: "call_abc", name: "get_weather",
+            input: .object(["location": .string("SF")]))
         let messages: [ChatMessage] = [
             ChatMessage(role: .user, text: "weather?"),
             ChatMessage(role: .assistant, content: [.toolUse(toolUse)]),
@@ -55,9 +57,11 @@ struct PromptBuilderTests {
 
     @Test func toolMessageHasToolCallIdAndContent() {
         let messages: [ChatMessage] = [
-            ChatMessage(role: .tool, content: [
-                .toolResult(.init(toolUseId: "call_abc", content: "sunny", isError: false))
-            ]),
+            ChatMessage(
+                role: .tool,
+                content: [
+                    .toolResult(.init(toolUseId: "call_abc", content: "sunny", isError: false))
+                ])
         ]
         let dicts = PromptBuilder.messageDicts(from: messages)
         let tool = dicts[0]
@@ -69,9 +73,11 @@ struct PromptBuilderTests {
 
     @Test func toolErrorMarksMessage() {
         let messages: [ChatMessage] = [
-            ChatMessage(role: .tool, content: [
-                .toolResult(.init(toolUseId: "call_1", content: "fail", isError: true))
-            ]),
+            ChatMessage(
+                role: .tool,
+                content: [
+                    .toolResult(.init(toolUseId: "call_1", content: "fail", isError: true))
+                ])
         ]
         let dict = PromptBuilder.messageDicts(from: messages)[0]
         #expect(dict["is_error"] as? Bool == true)
@@ -83,10 +89,12 @@ struct PromptBuilderTests {
         // `content`, call in `tool_calls`.
         let toolUse = ToolUse(id: "id_1", name: "f", input: .object([:]))
         let messages: [ChatMessage] = [
-            ChatMessage(role: .assistant, content: [
-                .text("Let me check."),
-                .toolUse(toolUse),
-            ]),
+            ChatMessage(
+                role: .assistant,
+                content: [
+                    .text("Let me check."),
+                    .toolUse(toolUse),
+                ])
         ]
         let dict = PromptBuilder.messageDicts(from: messages)[0]
         #expect(dict["content"] as? String == "Let me check.")

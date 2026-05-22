@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("RetryPolicy")
@@ -40,7 +41,13 @@ struct RetryPolicyTests {
         let policy = RetryPolicy(schedule: [0.001, 0.001, 0.001], maxAttempts: 4)
 
         // Box around the call counter — sendable closure capture rules.
-        actor Counter { var n = 0; func tick() -> Int { n += 1; return n } }
+        actor Counter {
+            var n = 0
+            func tick() -> Int {
+                n += 1
+                return n
+            }
+        }
         let counter = Counter()
 
         let result = try await policy.run { () -> String in
@@ -55,7 +62,13 @@ struct RetryPolicyTests {
 
     @Test func nonTransientErrorAbortsImmediately() async {
         let policy = RetryPolicy(schedule: [0.001, 0.001], maxAttempts: 3)
-        actor Counter { var n = 0; func tick() -> Int { n += 1; return n } }
+        actor Counter {
+            var n = 0
+            func tick() -> Int {
+                n += 1
+                return n
+            }
+        }
         let counter = Counter()
 
         do {
@@ -75,7 +88,13 @@ struct RetryPolicyTests {
 
     @Test func exhaustsAttemptsAndThrows() async {
         let policy = RetryPolicy(schedule: [0.001, 0.001], maxAttempts: 3)
-        actor Counter { var n = 0; func tick() -> Int { n += 1; return n } }
+        actor Counter {
+            var n = 0
+            func tick() -> Int {
+                n += 1
+                return n
+            }
+        }
         let counter = Counter()
 
         do {

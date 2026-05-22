@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("HarmonyParser")
@@ -189,8 +190,9 @@ struct HarmonyParserTests {
         let json = events.compactMap {
             if case .toolUseInputDelta(let s) = $0 { return s } else { return nil }
         }.joined()
-        #expect(json == #"{"path":"./","recursive":true}"#,
-                "JSON was truncated to \(json.debugDescription)")
+        #expect(
+            json == #"{"path":"./","recursive":true}"#,
+            "JSON was truncated to \(json.debugDescription)")
         #expect(events.last == .toolUseStop)
     }
 }

@@ -12,16 +12,26 @@ struct ServeCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Port to listen on.")
     var port: Int = 8080
 
-    @Option(name: .long, help: "Address to bind. Use 0.0.0.0 to allow non-loopback access (requires --auth-token).")
+    @Option(
+        name: .long,
+        help: "Address to bind. Use 0.0.0.0 to allow non-loopback access (requires --auth-token).")
     var bind: String = "127.0.0.1"
 
-    @Option(name: .long, help: "Bearer token required on inbound requests. Mandatory when --bind is non-loopback.")
+    @Option(
+        name: .long,
+        help: "Bearer token required on inbound requests. Mandatory when --bind is non-loopback.")
     var authToken: String?
 
-    @Option(name: .long, help: "Maximum bytes resident across all loaded models. Accepts e.g. '32GB' or raw bytes.")
+    @Option(
+        name: .long,
+        help: "Maximum bytes resident across all loaded models. Accepts e.g. '32GB' or raw bytes.")
     var memoryBudget: String?
 
-    @Option(name: .long, help: "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). The clock only starts when no connections remain.")
+    @Option(
+        name: .long,
+        help:
+            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). The clock only starts when no connections remain."
+    )
     var idleTimeout: String = "2m"
 
     @Option(name: .long, help: "Cap on the number of models that can be resident at once.")

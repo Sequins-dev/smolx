@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("InteractivePicker")
@@ -75,34 +76,40 @@ struct InteractivePickerTests {
 
     @Test func viewportTopUnchangedWhenSelectionInside() {
         // selected=2 fits in [1, 5) so top stays at 1.
-        #expect(InteractivePicker.viewport(
-            selected: 2, total: 20, top: 1, size: 4) == 1)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 2, total: 20, top: 1, size: 4) == 1)
     }
 
     @Test func viewportScrollsDownToKeepSelectionVisible() {
         // selected=5 is past viewport [1, 5); top must shift to 2 so
         // selection lands at the bottom of [2, 6).
-        #expect(InteractivePicker.viewport(
-            selected: 5, total: 20, top: 1, size: 4) == 2)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 5, total: 20, top: 1, size: 4) == 2)
     }
 
     @Test func viewportScrollsUpToKeepSelectionVisible() {
         // selected=0 is before viewport [3, 7); top snaps to 0.
-        #expect(InteractivePicker.viewport(
-            selected: 0, total: 20, top: 3, size: 4) == 0)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 0, total: 20, top: 3, size: 4) == 0)
     }
 
     @Test func viewportClampsToMaxTopWhenNearEnd() {
         // total=10, size=4 → maxTop=6. selected at the end should not
         // push top past 6 (would render past the array).
-        #expect(InteractivePicker.viewport(
-            selected: 9, total: 10, top: 8, size: 4) == 6)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 9, total: 10, top: 8, size: 4) == 6)
     }
 
     @Test func viewportHandlesEmptyAndZeroSize() {
-        #expect(InteractivePicker.viewport(
-            selected: 0, total: 0, top: 0, size: 4) == 0)
-        #expect(InteractivePicker.viewport(
-            selected: 5, total: 10, top: 3, size: 0) == 0)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 0, total: 0, top: 0, size: 4) == 0)
+        #expect(
+            InteractivePicker.viewport(
+                selected: 5, total: 10, top: 3, size: 0) == 0)
     }
 }

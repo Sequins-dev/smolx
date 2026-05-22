@@ -1,5 +1,5 @@
-import Foundation
 import Dispatch
+import Foundation
 
 /// Listens for system-wide memory-pressure events and forwards them to a
 /// handler. Lives for the lifetime of the server.
@@ -15,9 +15,13 @@ final class MemoryMonitor: @unchecked Sendable {
         source.setEventHandler { [source] in
             let raw = source.data
             let level: Level
-            if raw.contains(.critical) { level = .critical }
-            else if raw.contains(.warning) { level = .warning }
-            else { level = .normal }
+            if raw.contains(.critical) {
+                level = .critical
+            } else if raw.contains(.warning) {
+                level = .warning
+            } else {
+                level = .normal
+            }
             onLevel(level)
         }
     }

@@ -90,7 +90,7 @@ enum InteractivePicker {
         }
         let separator = "   •   "
         let period = s.count + separator.count
-        let normalized = ((offset % period) + period) % period   // safe mod
+        let normalized = ((offset % period) + period) % period  // safe mod
         // Concatenate s+sep+s+sep so any window of `width` is in range.
         let doubled = s + separator + s + separator
         let chars = Array(doubled)
@@ -282,7 +282,7 @@ enum InteractivePicker {
             //    don't prefetch earlier — `pageSize=20` means a single
             //    fetch covers the user's next ~20 down-arrows.
             if !loading, !exhausted, let fetcher = fetchMore,
-               selected >= rows.count - 1
+                selected >= rows.count - 1
             {
                 loading = true
                 let box = box
@@ -361,7 +361,8 @@ enum InteractivePicker {
             }
             let row = rows[idx]
             let isSelected = idx == selected
-            let marker = isSelected
+            let marker =
+                isSelected
                 ? "\u{001B}[1;36m▸\u{001B}[0m "
                 : "  "
             let primaryText: String

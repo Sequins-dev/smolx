@@ -42,9 +42,11 @@ enum OpenAIResponsesRoute {
             }
 
             if RouteGate.hasImages(decoded.messages),
-               lease.provider.descriptor.capability != .vision {
+                lease.provider.descriptor.capability != .vision
+            {
                 await lease.release()
-                return OpenAIRoutes.errorResponse(.badRequest,
+                return OpenAIRoutes.errorResponse(
+                    .badRequest,
                     message: "Model '\(decoded.model)' does not support image inputs.")
             }
 
@@ -80,13 +82,15 @@ enum OpenAIResponsesRoute {
                 let state = ResponsesTranslator.StreamState(
                     responseId: responseId, model: decoded.model)
                 for frame in try ResponsesTranslator.startFrames(state: state) {
-                    try await writer.write(SSE.namedEventFrame(
-                        event: frame.event, json: frame.jsonData))
+                    try await writer.write(
+                        SSE.namedEventFrame(
+                            event: frame.event, json: frame.jsonData))
                 }
                 for try await event in stream {
                     for frame in try ResponsesTranslator.frames(for: event, state: state) {
-                        try await writer.write(SSE.namedEventFrame(
-                            event: frame.event, json: frame.jsonData))
+                        try await writer.write(
+                            SSE.namedEventFrame(
+                                event: frame.event, json: frame.jsonData))
                     }
                 }
                 try await writer.finish(nil)
@@ -129,8 +133,9 @@ enum OpenAIResponsesRoute {
                     currentTool?.jsonBuffer += chunk
                 case .toolUseStop:
                     if let t = currentTool {
-                        let input: JSONValue = (try? JSONDecoder().decode(
-                            JSONValue.self, from: Data(t.jsonBuffer.utf8))) ?? .object([:])
+                        let input: JSONValue =
+                            (try? JSONDecoder().decode(
+                                JSONValue.self, from: Data(t.jsonBuffer.utf8))) ?? .object([:])
                         toolCalls.append(.init(id: t.id, name: t.name, input: input))
                         currentTool = nil
                     }

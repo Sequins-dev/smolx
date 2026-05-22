@@ -18,10 +18,10 @@ enum StreamEvent: Sendable, Equatable {
 }
 
 enum FinishReason: String, Sendable, Equatable {
-    case stop          // natural end / stop sequence hit
-    case length        // hit max_tokens
-    case toolCalls     // model emitted tool_use
-    case contentFilter // safety stop
+    case stop  // natural end / stop sequence hit
+    case length  // hit max_tokens
+    case toolCalls  // model emitted tool_use
+    case contentFilter  // safety stop
 }
 
 struct Usage: Sendable, Equatable {

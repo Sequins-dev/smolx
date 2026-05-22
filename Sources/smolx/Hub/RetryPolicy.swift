@@ -42,7 +42,8 @@ struct RetryPolicy: Sendable {
                 if !Self.isTransient(error) || attempt == maxAttempts {
                     throw error
                 }
-                let delaySeconds = schedule.indices.contains(attempt - 1)
+                let delaySeconds =
+                    schedule.indices.contains(attempt - 1)
                     ? schedule[attempt - 1]
                     : (schedule.last ?? 1.0)
                 try await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
@@ -59,15 +60,15 @@ struct RetryPolicy: Sendable {
         if let urlErr = error as? URLError {
             switch urlErr.code {
             case .timedOut,
-                 .networkConnectionLost,
-                 .notConnectedToInternet,
-                 .dnsLookupFailed,
-                 .cannotConnectToHost,
-                 .cannotFindHost,
-                 .resourceUnavailable,
-                 .secureConnectionFailed,
-                 .dataNotAllowed,
-                 .internationalRoamingOff:
+                .networkConnectionLost,
+                .notConnectedToInternet,
+                .dnsLookupFailed,
+                .cannotConnectToHost,
+                .cannotFindHost,
+                .resourceUnavailable,
+                .secureConnectionFailed,
+                .dataNotAllowed,
+                .internationalRoamingOff:
                 return true
             default:
                 return false

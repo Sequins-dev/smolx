@@ -29,10 +29,10 @@ final class HarmonyParser: @unchecked Sendable {
     }
 
     private enum State {
-        case idle                                    // between blocks; suppress
-        case analysis                                // chain-of-thought; suppress
-        case commentary(id: String, name: String)   // tool args; emit as input delta
-        case finalChannel                            // user-visible; emit as text
+        case idle  // between blocks; suppress
+        case analysis  // chain-of-thought; suppress
+        case commentary(id: String, name: String)  // tool args; emit as input delta
+        case finalChannel  // user-visible; emit as text
     }
 
     /// Longest trailing prefix we have to hold back to avoid splitting a
@@ -85,7 +85,7 @@ final class HarmonyParser: @unchecked Sendable {
 
     private func drain() -> [Event] {
         var events: [Event] = []
-        while drainStep(&events) { /* keep going while progress is made */ }
+        while drainStep(&events) { /* keep going while progress is made */  }
         return events
     }
 
@@ -114,8 +114,9 @@ final class HarmonyParser: @unchecked Sendable {
             shrinkBufferToSafetyMargin()
             return false
         }
-        guard let msgRange = buffer.range(
-            of: "<|message|>", range: chRange.upperBound..<buffer.endIndex)
+        guard
+            let msgRange = buffer.range(
+                of: "<|message|>", range: chRange.upperBound..<buffer.endIndex)
         else {
             // Header is incomplete; wait for more input. Don't consume yet.
             return false

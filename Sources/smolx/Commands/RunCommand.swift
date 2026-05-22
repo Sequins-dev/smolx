@@ -17,7 +17,11 @@ struct RunCommand: AsyncParsableCommand {
     @Argument(help: "Agent CLI to launch.")
     var agent: String
 
-    @Option(name: .long, help: "Model to use for ALL tiers (sugar for setting --smart/--fast/--small to the same value). Persisted per-tier config still applies for tiers this doesn't override.")
+    @Option(
+        name: .long,
+        help:
+            "Model to use for ALL tiers (sugar for setting --smart/--fast/--small to the same value). Persisted per-tier config still applies for tiers this doesn't override."
+    )
     var model: String?
 
     @Option(name: .long, help: "Override the `smart` tier for this invocation only.")
@@ -32,10 +36,14 @@ struct RunCommand: AsyncParsableCommand {
     @Option(name: .long, help: "URL of an already-running smolx. Defaults to http://127.0.0.1:8080.")
     var baseUrl: String = "http://127.0.0.1:8080"
 
-    @Option(name: .long, help: "Bearer token to send with requests (only needed if the server requires one).")
+    @Option(
+        name: .long,
+        help: "Bearer token to send with requests (only needed if the server requires one).")
     var authToken: String?
 
-    @Flag(name: .long, help: "Skip the /healthz probe that verifies the server is running before launching the agent.")
+    @Flag(
+        name: .long,
+        help: "Skip the /healthz probe that verifies the server is running before launching the agent.")
     var noCheck: Bool = false
 
     // `.postTerminator` only captures args appearing AFTER a literal `--`,
@@ -44,7 +52,8 @@ struct RunCommand: AsyncParsableCommand {
     // With the old `.captureForPassthrough` strategy, everything after the
     // agent name (including our own flags) was greedily forwarded to the
     // child, which then errored out on flags it didn't recognise.
-    @Argument(parsing: .postTerminator, help: "Arguments forwarded to the agent CLI. Place after `--`.")
+    @Argument(
+        parsing: .postTerminator, help: "Arguments forwarded to the agent CLI. Place after `--`.")
     var passthrough: [String] = []
 
     func run() async throws {
@@ -52,16 +61,18 @@ struct RunCommand: AsyncParsableCommand {
         let installedModels = (try? registry.load()) ?? []
         let userConfig = (try? UserConfig.load()) ?? UserConfig()
 
-        guard let models = ModelTuple.resolve(
-            config: userConfig,
-            smartOverride: smart,
-            fastOverride: fast,
-            smallOverride: small,
-            modelSugar: model,
-            firstInstalled: installedModels.first?.name)
+        guard
+            let models = ModelTuple.resolve(
+                config: userConfig,
+                smartOverride: smart,
+                fastOverride: fast,
+                smallOverride: small,
+                modelSugar: model,
+                firstInstalled: installedModels.first?.name)
         else {
-            FileHandle.standardError.write(Data(
-                "No model installed. Use `smolx pull <repo-id>` first, or pass --model.\n".utf8))
+            FileHandle.standardError.write(
+                Data(
+                    "No model installed. Use `smolx pull <repo-id>` first, or pass --model.\n".utf8))
             throw ExitCode.failure
         }
 
@@ -70,8 +81,9 @@ struct RunCommand: AsyncParsableCommand {
         // surface "model not found" mid-session.
         for alias in Set([models.smart, models.fast, models.small]) {
             if try registry.find(alias) == nil {
-                FileHandle.standardError.write(Data(
-                    "Unknown model alias '\(alias)'. Run `smolx models` to see installed models.\n".utf8))
+                FileHandle.standardError.write(
+                    Data(
+                        "Unknown model alias '\(alias)'. Run `smolx models` to see installed models.\n".utf8))
                 throw ExitCode.failure
             }
         }
@@ -93,11 +105,13 @@ struct RunCommand: AsyncParsableCommand {
         // instead of letting the agent hang waiting for a non-existent endpoint.
         if !noCheck {
             if !(await Self.serverReachable(baseUrl)) {
-                FileHandle.standardError.write(Data("""
-                    smolx is not reachable at \(baseUrl).
-                    Start it in another shell: `smolx serve` — or pass --no-check to skip this probe.
+                FileHandle.standardError.write(
+                    Data(
+                        """
+                        smolx is not reachable at \(baseUrl).
+                        Start it in another shell: `smolx serve` — or pass --no-check to skip this probe.
 
-                    """.utf8))
+                        """.utf8))
                 throw ExitCode.failure
             }
         }
@@ -116,15 +130,17 @@ struct RunCommand: AsyncParsableCommand {
                 try file.contents.write(
                     toFile: file.path, atomically: true, encoding: .utf8)
             } catch {
-                FileHandle.standardError.write(Data(
-                    "Failed to write \(file.path): \(error)\n".utf8))
+                FileHandle.standardError.write(
+                    Data(
+                        "Failed to write \(file.path): \(error)\n".utf8))
                 throw ExitCode.failure
             }
         }
 
         guard let executablePath = Self.resolveExecutable(plan.executable) else {
-            FileHandle.standardError.write(Data(
-                "Could not find `\(plan.executable)` on PATH. Install it and try again.\n".utf8))
+            FileHandle.standardError.write(
+                Data(
+                    "Could not find `\(plan.executable)` on PATH. Install it and try again.\n".utf8))
             throw ExitCode.failure
         }
 
@@ -225,8 +241,9 @@ struct RunCommand: AsyncParsableCommand {
         // Only reached if execve failed.
         let err = errno
         let message = String(cString: strerror(err))
-        FileHandle.standardError.write(Data(
-            "execve(\(executablePath)) failed (errno \(err)): \(message)\n".utf8))
+        FileHandle.standardError.write(
+            Data(
+                "execve(\(executablePath)) failed (errno \(err)): \(message)\n".utf8))
         Darwin.exit(1)
     }
 }

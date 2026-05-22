@@ -74,8 +74,9 @@ enum AnthropicTranslator {
                 case .toolUse(let id, let name, let input):
                     blocks.append(.toolUse(.init(id: id, name: name, input: input)))
                 case .toolResult(let id, let content, let isError):
-                    blocks.append(.toolResult(
-                        .init(toolUseId: id, content: content, isError: isError)))
+                    blocks.append(
+                        .toolResult(
+                            .init(toolUseId: id, content: content, isError: isError)))
                 }
             }
         }
@@ -176,7 +177,8 @@ enum AnthropicTranslator {
         case .textDelta(let s):
             var frames: [Frame] = []
             if state.openTextIndex == nil {
-                let idx = state.nextIndex; state.nextIndex += 1
+                let idx = state.nextIndex
+                state.nextIndex += 1
                 state.openTextIndex = idx
                 let open = Anthropic.ContentBlockStart(
                     index: idx, contentBlock: .text(""))
@@ -190,12 +192,14 @@ enum AnthropicTranslator {
         case .toolUseStart(let tid, let name):
             var frames: [Frame] = []
             if let textIdx = state.openTextIndex {
-                frames.append(try frame(
-                    event: "content_block_stop",
-                    payload: Anthropic.ContentBlockStop(index: textIdx)))
+                frames.append(
+                    try frame(
+                        event: "content_block_stop",
+                        payload: Anthropic.ContentBlockStop(index: textIdx)))
                 state.openTextIndex = nil
             }
-            let idx = state.nextIndex; state.nextIndex += 1
+            let idx = state.nextIndex
+            state.nextIndex += 1
             state.openToolIndex = idx
             let open = Anthropic.ContentBlockStart(
                 index: idx,
@@ -212,22 +216,26 @@ enum AnthropicTranslator {
         case .toolUseStop:
             guard let idx = state.openToolIndex else { return [] }
             state.openToolIndex = nil
-            return [try frame(
-                event: "content_block_stop",
-                payload: Anthropic.ContentBlockStop(index: idx))]
+            return [
+                try frame(
+                    event: "content_block_stop",
+                    payload: Anthropic.ContentBlockStop(index: idx))
+            ]
 
         case .done(let reason, let usage):
             var frames: [Frame] = []
             if let textIdx = state.openTextIndex {
-                frames.append(try frame(
-                    event: "content_block_stop",
-                    payload: Anthropic.ContentBlockStop(index: textIdx)))
+                frames.append(
+                    try frame(
+                        event: "content_block_stop",
+                        payload: Anthropic.ContentBlockStop(index: textIdx)))
                 state.openTextIndex = nil
             }
             if let toolIdx = state.openToolIndex {
-                frames.append(try frame(
-                    event: "content_block_stop",
-                    payload: Anthropic.ContentBlockStop(index: toolIdx)))
+                frames.append(
+                    try frame(
+                        event: "content_block_stop",
+                        payload: Anthropic.ContentBlockStop(index: toolIdx)))
                 state.openToolIndex = nil
             }
             let md = Anthropic.MessageDelta(

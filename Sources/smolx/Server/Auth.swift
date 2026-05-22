@@ -16,14 +16,16 @@ struct BearerAuthMiddleware<Context: RequestContext>: MiddlewareProtocol {
             return try await next(request, context)
         }
         guard let header = request.headers[.authorization],
-              header == "Bearer \(token)" || header == token
+            header == "Bearer \(token)" || header == token
         else {
             return Response(
                 status: .unauthorized,
                 headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: ByteBuffer(string: """
-                    {"error":{"type":"unauthorized","message":"Invalid or missing bearer token"}}
-                    """)))
+                body: .init(
+                    byteBuffer: ByteBuffer(
+                        string: """
+                            {"error":{"type":"unauthorized","message":"Invalid or missing bearer token"}}
+                            """)))
         }
         return try await next(request, context)
     }

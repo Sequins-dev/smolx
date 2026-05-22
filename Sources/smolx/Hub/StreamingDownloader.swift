@@ -29,7 +29,7 @@ final class StreamingDownloader: @unchecked Sendable {
         config.httpMaximumConnectionsPerHost = 8
 
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1   // serialize delegate callbacks
+        queue.maxConcurrentOperationCount = 1  // serialize delegate callbacks
         queue.name = "smolx.streaming-downloader.delegate"
 
         let delegate = Delegate()
@@ -160,7 +160,8 @@ final class StreamingDownloader: @unchecked Sendable {
             resumeFrom: Int64,
             continuation: CheckedContinuation<HTTPURLResponse, Error>
         ) {
-            lock.lock(); defer { lock.unlock() }
+            lock.lock()
+            defer { lock.unlock() }
             pending[taskID] = Pending(
                 fileHandle: fileHandle,
                 progress: progress,
@@ -188,7 +189,7 @@ final class StreamingDownloader: @unchecked Sendable {
         ) {
             lock.lock()
             if var p = pending[dataTask.taskIdentifier],
-               let http = response as? HTTPURLResponse
+                let http = response as? HTTPURLResponse
             {
                 p.receivedResponse = http
                 let contentLength = http.expectedContentLength
@@ -208,7 +209,8 @@ final class StreamingDownloader: @unchecked Sendable {
         ) {
             lock.lock()
             guard var p = pending[dataTask.taskIdentifier] else {
-                lock.unlock(); return
+                lock.unlock()
+                return
             }
             do {
                 try p.fileHandle.write(contentsOf: data)

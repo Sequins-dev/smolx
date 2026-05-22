@@ -1,6 +1,7 @@
-import Testing
 import Foundation
 import HuggingFace
+import Testing
+
 @testable import smolx
 
 @Suite("PullCommand")

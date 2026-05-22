@@ -224,7 +224,8 @@ actor ModelManager {
 
     private func makeRoom(for needed: Int64) async {
         while currentResidentBytes() + needed > settings.memoryBudget,
-              !loaded.isEmpty {
+            !loaded.isEmpty
+        {
             await evictOneLRU(reason: "budget")
         }
     }
@@ -237,7 +238,9 @@ actor ModelManager {
             // memory for a new load. The provider's `unload()` drops the
             // container; in-flight `generate()` calls observe the loss via
             // their existing cancellation plumbing and error out cleanly.
-            logger.warning("Evicting active model \(victim) (reason: \(reason)) — in-flight requests will be cancelled")
+            logger.warning(
+                "Evicting active model \(victim) (reason: \(reason)) — in-flight requests will be cancelled"
+            )
         } else {
             logger.info("Evicting \(victim) (reason: \(reason))")
         }

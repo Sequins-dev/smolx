@@ -1,11 +1,11 @@
 import CoreImage
 import Foundation
+import HuggingFace
 import Logging
 import MLX
+import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
-import MLXHuggingFace
-import HuggingFace
 import Tokenizers
 
 /// Concrete provider that loads MLX-quantised weights from a local snapshot
@@ -158,7 +158,7 @@ actor MLXProvider: ModelProvider {
 
                         let harmony: HarmonyParser? =
                             repoId.lowercased().contains("gpt-oss")
-                                ? HarmonyParser() : nil
+                            ? HarmonyParser() : nil
                         var emittedToolCall = false
                         let debug = Self.debugRawEnabled
 
@@ -178,7 +178,9 @@ actor MLXProvider: ModelProvider {
                             case .chunk:
                                 break
                             case .toolCall(let tc):
-                                if debug { logger.info("RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)") }
+                                if debug {
+                                    logger.info("RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)")
+                                }
                                 emittedToolCall = true
                                 let id = "toolu_\(UUID().uuidString.prefix(16))"
                                 continuation.yield(.toolUseStart(id: String(id), name: tc.function.name))

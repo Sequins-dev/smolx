@@ -52,9 +52,11 @@ enum OpenAIRoutes {
             }
 
             if RouteGate.hasImages(decoded.messages),
-               lease.provider.descriptor.capability != .vision {
+                lease.provider.descriptor.capability != .vision
+            {
                 await lease.release()
-                return errorResponse(.badRequest,
+                return errorResponse(
+                    .badRequest,
                     message: "Model '\(decoded.model)' does not support image inputs.")
             }
 
@@ -154,8 +156,9 @@ enum OpenAIRoutes {
                     currentTool?.jsonBuffer += chunk
                 case .toolUseStop:
                     if let t = currentTool {
-                        let input: JSONValue = (try? JSONDecoder().decode(
-                            JSONValue.self, from: Data(t.jsonBuffer.utf8))) ?? .object([:])
+                        let input: JSONValue =
+                            (try? JSONDecoder().decode(
+                                JSONValue.self, from: Data(t.jsonBuffer.utf8))) ?? .object([:])
                         toolCalls.append(.init(id: t.id, name: t.name, input: input))
                         currentTool = nil
                     }

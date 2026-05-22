@@ -39,8 +39,11 @@ struct HubDownloader: Sendable {
                 let fullPath = directory.appendingPathComponent(relPath).path
                 guard let attrs = try? fm.attributesOfItem(atPath: fullPath) else { continue }
                 guard (attrs[.type] as? FileAttributeType) == .typeRegular else { continue }
-                if let size = attrs[.size] as? Int64 { total += size }
-                else if let size = attrs[.size] as? Int { total += Int64(size) }
+                if let size = attrs[.size] as? Int64 {
+                    total += size
+                } else if let size = attrs[.size] as? Int {
+                    total += Int64(size)
+                }
             }
             return total
         }
@@ -101,8 +104,9 @@ struct HubDownloader: Sendable {
             let total = Int64(entry.size ?? 0)
             let dest = modelDir.appendingPathComponent(entry.path)
             let partial = dest.appendingPathExtension("partial")
-            let resumedFrom = (try? FileManager.default
-                .attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
+            let resumedFrom =
+                (try? FileManager.default
+                    .attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
             await tracker.register(
                 index: index, path: entry.path,
                 total: total, resumedFrom: min(resumedFrom, total))
@@ -185,14 +189,16 @@ struct HubDownloader: Sendable {
         // Fast path: if the final file already exists (from a previous run
         // that completed), skip the network entirely.
         if FileManager.default.fileExists(atPath: destination.path) {
-            let size = ((try? FileManager.default
-                .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
+            let size =
+                ((try? FileManager.default
+                    .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
                 ?? Int64(entry.size ?? 0)
             await tracker.cached(index: index, bytes: size)
             return
         }
 
-        let url = base
+        let url =
+            base
             .appendingPathComponent(repo.namespace)
             .appendingPathComponent(repo.name)
             .appendingPathComponent("resolve")
@@ -229,8 +235,9 @@ struct HubDownloader: Sendable {
                 try await streamer.download(
                     url: url, destination: destination, progress: progress)
             }
-            let finalBytes = ((try? FileManager.default
-                .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
+            let finalBytes =
+                ((try? FileManager.default
+                    .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
                 ?? Int64(entry.size ?? 0)
             await tracker.completed(index: index, finalBytes: finalBytes)
         } catch is CancellationError {
@@ -269,7 +276,8 @@ struct HubDownloader: Sendable {
             if base.hasPrefix("vocab") || base.hasPrefix("merges") { return true }
             if path.hasSuffix(".model") { return true }
             if hasSafetensors,
-               path.hasSuffix(".bin") || path.hasSuffix(".gguf") || path.hasSuffix(".pt") {
+                path.hasSuffix(".bin") || path.hasSuffix(".gguf") || path.hasSuffix(".pt")
+            {
                 return false
             }
             return false

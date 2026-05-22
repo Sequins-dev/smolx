@@ -53,7 +53,8 @@ enum OpenAI {
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
             if let s = try? c.decode(String.self) {
-                self = .text(s); return
+                self = .text(s)
+                return
             }
             self = .parts(try c.decode([Part].self))
         }
@@ -116,9 +117,13 @@ enum OpenAI {
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
             if let s = try? c.decode(String.self) {
-                self = .string(s); return
+                self = .string(s)
+                return
             }
-            struct Named: Decodable { let function: Inner; struct Inner: Decodable { let name: String } }
+            struct Named: Decodable {
+                let function: Inner
+                struct Inner: Decodable { let name: String }
+            }
             let n = try c.decode(Named.self)
             self = .named(name: n.function.name)
         }
@@ -146,7 +151,10 @@ enum OpenAI {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
-            if let s = try? c.decode(String.self) { self = .one(s); return }
+            if let s = try? c.decode(String.self) {
+                self = .one(s)
+                return
+            }
             self = .many(try c.decode([String].self))
         }
 

@@ -1,5 +1,6 @@
-import Testing
 import Foundation
+import Testing
+
 @testable import smolx
 
 @Suite("AgentEnvironment")
@@ -75,10 +76,12 @@ struct AgentEnvironmentTests {
 
     @Test func opencodePlanInjectsInlineConfigWithAllModels() throws {
         let installed = [
-            ModelDescriptor(name: "a", repoId: "x/a", localPath: "/p/a",
-                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
-            ModelDescriptor(name: "b", repoId: "x/b", localPath: "/p/b",
-                            capability: .vision, diskSizeBytes: 200, addedAt: Date()),
+            ModelDescriptor(
+                name: "a", repoId: "x/a", localPath: "/p/a",
+                capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(
+                name: "b", repoId: "x/b", localPath: "/p/b",
+                capability: .vision, diskSizeBytes: 200, addedAt: Date()),
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "opencode", baseURL: "http://127.0.0.1:8080",
@@ -108,10 +111,12 @@ struct AgentEnvironmentTests {
 
     @Test func piPlanSandboxesAgentDirAndListsAllModels() throws {
         let installed = [
-            ModelDescriptor(name: "a", repoId: "x/a", localPath: "/p/a",
-                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
-            ModelDescriptor(name: "b", repoId: "x/b", localPath: "/p/b",
-                            capability: .vision, diskSizeBytes: 200, addedAt: Date()),
+            ModelDescriptor(
+                name: "a", repoId: "x/a", localPath: "/p/a",
+                capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(
+                name: "b", repoId: "x/b", localPath: "/p/b",
+                capability: .vision, diskSizeBytes: 200, addedAt: Date()),
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "pi", baseURL: "http://127.0.0.1:8080",
@@ -147,8 +152,9 @@ struct AgentEnvironmentTests {
 
     @Test func crushPlanInjectsOpenAICompatProvider() throws {
         let installed = [
-            ModelDescriptor(name: "m1", repoId: "x/m1", localPath: "/p/m1",
-                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(
+                name: "m1", repoId: "x/m1", localPath: "/p/m1",
+                capability: .text, diskSizeBytes: 100, addedAt: Date())
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "crush", baseURL: "http://127.0.0.1:8080",
@@ -230,18 +236,24 @@ struct AgentEnvironmentTests {
         // Each flag is followed by its value (positional in argv).
         if let i = args.firstIndex(of: "--model") {
             #expect(args[args.index(after: i)] == "S-smart")
-        } else { Issue.record("missing --model") }
+        } else {
+            Issue.record("missing --model")
+        }
         if let i = args.firstIndex(of: "--weak-model") {
             #expect(args[args.index(after: i)] == "T-small")
-        } else { Issue.record("missing --weak-model") }
+        } else {
+            Issue.record("missing --weak-model")
+        }
     }
 
     @Test func opencodePlanWiresSmartAndSmallModel() throws {
         let installed = [
-            ModelDescriptor(name: "S-smart", repoId: "x/s", localPath: "/p/s",
-                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
-            ModelDescriptor(name: "T-small", repoId: "x/t", localPath: "/p/t",
-                            capability: .text, diskSizeBytes: 50, addedAt: Date()),
+            ModelDescriptor(
+                name: "S-smart", repoId: "x/s", localPath: "/p/s",
+                capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(
+                name: "T-small", repoId: "x/t", localPath: "/p/t",
+                capability: .text, diskSizeBytes: 50, addedAt: Date()),
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "opencode", baseURL: "http://localhost:8080",
@@ -256,10 +268,12 @@ struct AgentEnvironmentTests {
 
     @Test func crushPlanWiresLargeAndSmallTiers() throws {
         let installed = [
-            ModelDescriptor(name: "S-smart", repoId: "x/s", localPath: "/p/s",
-                            capability: .text, diskSizeBytes: 100, addedAt: Date()),
-            ModelDescriptor(name: "T-small", repoId: "x/t", localPath: "/p/t",
-                            capability: .text, diskSizeBytes: 50, addedAt: Date()),
+            ModelDescriptor(
+                name: "S-smart", repoId: "x/s", localPath: "/p/s",
+                capability: .text, diskSizeBytes: 100, addedAt: Date()),
+            ModelDescriptor(
+                name: "T-small", repoId: "x/t", localPath: "/p/t",
+                capability: .text, diskSizeBytes: 50, addedAt: Date()),
         ]
         let plan = try AgentEnvironment.plan(
             agentName: "crush", baseURL: "http://localhost:8080",

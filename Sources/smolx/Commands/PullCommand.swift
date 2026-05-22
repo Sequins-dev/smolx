@@ -9,10 +9,16 @@ struct PullCommand: AsyncParsableCommand {
         abstract: "Download a HuggingFace MLX model into the local cache and register it."
     )
 
-    @Argument(help: "HuggingFace repo id (e.g. 'mlx-community/Qwen3.6-27B-4bit') or a substring to search for. Partial inputs open an interactive picker.")
+    @Argument(
+        help:
+            "HuggingFace repo id (e.g. 'mlx-community/Qwen3.6-27B-4bit') or a substring to search for. Partial inputs open an interactive picker."
+    )
     var repoId: String
 
-    @Option(name: .long, help: "Short alias to address this model in the API (defaults to the repo's basename, lowercased).")
+    @Option(
+        name: .long,
+        help:
+            "Short alias to address this model in the API (defaults to the repo's basename, lowercased).")
     var alias: String?
 
     @Option(name: .long, help: "Number of files to download concurrently.")
@@ -78,15 +84,17 @@ struct PullCommand: AsyncParsableCommand {
                 // pick the wrong repo. Size is omitted here — fetching
                 // per-row sizes for a fallback the user will copy/paste
                 // from isn't worth 20 round-trips.
-                FileHandle.standardError.write(Data(
-                    "Multiple MLX models match \"\(repoId)\":\n".utf8))
+                FileHandle.standardError.write(
+                    Data(
+                        "Multiple MLX models match \"\(repoId)\":\n".utf8))
                 let now = Date()
                 for p in pairs {
                     let meta = Self.formatRow(for: p.model, sizeBytes: nil, now: now)
                     FileHandle.standardError.write(Data("  \(p.id)  \(meta)\n".utf8))
                 }
-                FileHandle.standardError.write(Data(
-                    "error: rerun with an exact repo id.\n".utf8))
+                FileHandle.standardError.write(
+                    Data(
+                        "error: rerun with an exact repo id.\n".utf8))
                 throw ExitCode.failure
             }
 
@@ -103,11 +111,12 @@ struct PullCommand: AsyncParsableCommand {
             // rows synchronously from the data we already have.
             let initialRows = await pager.primeAndBuildInitialRows()
 
-            guard let selection = try await InteractivePicker.pick(
-                title: "Pick a model to pull (↑/↓, Enter, q to abort):",
-                initialRows: initialRows,
-                style: expand ? .expanded : .compact,
-                fetchMore: { try await pager.fetchNext() })
+            guard
+                let selection = try await InteractivePicker.pick(
+                    title: "Pick a model to pull (↑/↓, Enter, q to abort):",
+                    initialRows: initialRows,
+                    style: expand ? .expanded : .compact,
+                    fetchMore: { try await pager.fetchNext() })
             else {
                 // User aborted — exit silently with a non-zero code that
                 // shells conventionally use for SIGINT-style cancellation.
@@ -159,7 +168,9 @@ struct PullCommand: AsyncParsableCommand {
             addedAt: Date())
         try registry.upsert(descriptor)
 
-        print("Installed \(alias) (\(descriptor.capability.rawValue), \(Self.formatBytes(descriptor.diskSizeBytes)))")
+        print(
+            "Installed \(alias) (\(descriptor.capability.rawValue), \(Self.formatBytes(descriptor.diskSizeBytes)))"
+        )
         print("Path: \(descriptor.localPath)")
     }
 
@@ -296,8 +307,9 @@ private actor Pager {
         self.page = initialPage
         self.client = client
         self.fetchSizes = fetchSizes
-        self.byId = Dictionary(uniqueKeysWithValues:
-            initialPage.items.map { ($0.id.rawValue, $0) })
+        self.byId = Dictionary(
+            uniqueKeysWithValues:
+                initialPage.items.map { ($0.id.rawValue, $0) })
     }
 
     /// Pre-fetch sizes for the initial page (no-op in compact mode) and

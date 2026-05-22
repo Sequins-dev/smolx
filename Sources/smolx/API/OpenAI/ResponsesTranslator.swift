@@ -115,8 +115,9 @@ enum ResponsesTranslator {
         case .functionCall(let callId, let name, let args):
             // A previous-turn tool invocation. Render as an assistant message
             // containing a tool_use block so the model sees what it asked for.
-            let input: JSONValue = (try? JSONDecoder().decode(
-                JSONValue.self, from: Data(args.utf8))) ?? .object([:])
+            let input: JSONValue =
+                (try? JSONDecoder().decode(
+                    JSONValue.self, from: Data(args.utf8))) ?? .object([:])
             return ChatMessage(
                 role: .assistant,
                 content: [.toolUse(.init(id: callId, name: name, input: input))])
@@ -126,8 +127,11 @@ enum ResponsesTranslator {
             // message keyed by call_id.
             return ChatMessage(
                 role: .tool,
-                content: [.toolResult(.init(
-                    toolUseId: callId, content: output, isError: false))])
+                content: [
+                    .toolResult(
+                        .init(
+                            toolUseId: callId, content: output, isError: false))
+                ])
 
         case .other:
             return nil
@@ -145,20 +149,22 @@ enum ResponsesTranslator {
     ) -> OpenAIResponses.Response {
         var output: [OpenAIResponses.OutputItem] = []
         if !assistantText.isEmpty {
-            output.append(.message(
-                id: "msg_" + UUID().uuidString.prefix(20).lowercased(),
-                role: "assistant",
-                content: [.init(text: assistantText)],
-                status: "completed"))
+            output.append(
+                .message(
+                    id: "msg_" + UUID().uuidString.prefix(20).lowercased(),
+                    role: "assistant",
+                    content: [.init(text: assistantText)],
+                    status: "completed"))
         }
         for tc in toolCalls {
             let argsJSON = Self.encodeJSON(tc.input)
-            output.append(.functionCall(
-                id: "fc_" + UUID().uuidString.prefix(20).lowercased(),
-                callId: tc.id,
-                name: tc.name,
-                arguments: argsJSON,
-                status: "completed"))
+            output.append(
+                .functionCall(
+                    id: "fc_" + UUID().uuidString.prefix(20).lowercased(),
+                    callId: tc.id,
+                    name: tc.name,
+                    arguments: argsJSON,
+                    status: "completed"))
         }
         let usageOut = usage.map {
             OpenAIResponses.Usage(
@@ -384,7 +390,9 @@ enum ResponsesTranslator {
 
     // MARK: - Encoding
 
-    private static func frame<T: Encodable>(name: OpenAIResponses.EventName, payload: T) throws -> Frame {
+    private static func frame<T: Encodable>(name: OpenAIResponses.EventName, payload: T) throws
+        -> Frame
+    {
         let enc = JSONEncoder()
         enc.outputFormatting = [.withoutEscapingSlashes]
         let data = try enc.encode(payload)

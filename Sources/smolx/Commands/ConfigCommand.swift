@@ -26,7 +26,8 @@ struct ConfigCommand: AsyncParsableCommand {
         static func parse(_ raw: String) throws -> Tier {
             guard let t = Tier(rawValue: raw.lowercased()) else {
                 throw ValidationError(
-                    "unknown tier '\(raw)' — expected one of: \(allCases.map(\.rawValue).joined(separator: ", "))")
+                    "unknown tier '\(raw)' — expected one of: \(allCases.map(\.rawValue).joined(separator: ", "))"
+                )
             }
             return t
         }
@@ -70,7 +71,8 @@ struct ConfigCommand: AsyncParsableCommand {
             let registry = ModelRegistry()
             guard try registry.find(value) != nil else {
                 throw ValidationError(
-                    "model alias '\(value)' isn't registered — run `smolx models` to see installed models, or `smolx pull <repo>` to add one.")
+                    "model alias '\(value)' isn't registered — run `smolx models` to see installed models, or `smolx pull <repo>` to add one."
+                )
             }
             var cfg = try UserConfig.load()
             tier.write(value, into: &cfg)

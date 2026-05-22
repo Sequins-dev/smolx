@@ -41,7 +41,10 @@ enum Anthropic {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
-            if let s = try? c.decode(String.self) { self = .text(s); return }
+            if let s = try? c.decode(String.self) {
+                self = .text(s)
+                return
+            }
             self = .blocks(try c.decode([Block].self))
         }
 
@@ -101,7 +104,10 @@ enum Anthropic {
             if let s = try? c.decode(String.self, forKey: .content) {
                 return s
             }
-            struct TextOnly: Decodable { let type: String; let text: String? }
+            struct TextOnly: Decodable {
+                let type: String
+                let text: String?
+            }
             let parts = (try? c.decode([TextOnly].self, forKey: .content)) ?? []
             return parts.compactMap(\.text).joined()
         }
@@ -133,7 +139,7 @@ enum Anthropic {
         var type: String  // "base64" | "url"
         var mediaType: String?
         var data: String?  // base64-encoded bytes when type == "base64"
-        var url: String?   // when type == "url"
+        var url: String?  // when type == "url"
 
         enum CodingKeys: String, CodingKey {
             case type, data, url
@@ -148,7 +154,10 @@ enum Anthropic {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
-            if let s = try? c.decode(String.self) { self = .text(s); return }
+            if let s = try? c.decode(String.self) {
+                self = .text(s)
+                return
+            }
             self = .blocks(try c.decode([Block].self))
         }
 
