@@ -89,13 +89,23 @@ actor MLXProvider: ModelProvider {
     }
 
     func unload() async {
-        // Dropping the container releases the MLX weights — they're owned by
-        // ModelContainer and freed when the last reference goes away.
-        if container != nil {
-            logger.info("Unloading \(descriptor.name)")
-        }
+        // Dropping `container` is necessary but not sufficient: MLX keeps a
+        // GPU buffer pool that survives ARC release of `ModelContainer`. The
+        // weights only return to the system allocator when we explicitly call
+        // `MLX.Memory.clearCache()`. Order matters — drop the container first
+        // so its buffers are in the pool by the time clearCache drains it.
+        // `clearCache` only deallocates *cached* (unused) buffers, so other
+        // still-loaded providers are unaffected.
+        let wasLoaded = container != nil
         container = nil
         loadTask = nil
+        let before = MLX.Memory.activeMemory
+        MLX.Memory.clearCache()
+        let after = MLX.Memory.activeMemory
+        if wasLoaded {
+            let freedMB = Int64(before - after) / (1024 * 1024)
+            logger.info("Unloaded \(descriptor.name) — freed \(freedMB) MB")
+        }
     }
 
     // MARK: - Generation

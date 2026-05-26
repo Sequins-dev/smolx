@@ -264,4 +264,57 @@ struct ModelManagerTests {
         #expect(await mgr.currentlyLoaded() == ["a"])
         await lease2.release()
     }
+
+    // MARK: - Cleanup mode
+
+    /// In `lazy` mode the per-release idle timer is never scheduled, so a
+    /// released model stays resident past the timeout window. Only budget /
+    /// max-concurrent eviction can unload it.
+    @Test func lazyModeSkipsIdleEviction() async throws {
+        let counter = UnloadCounter()
+        let reg = try registryWith([descriptor("a", sizeGB: 1)])
+        let mgr = ModelManager(
+            registry: reg,
+            factory: StubFactory(unloaded: counter),
+            settings: .init(
+                memoryBudget: 1024 * 1_073_741_824, idleTimeout: 0.05, maxConcurrent: nil,
+                cleanupMode: .lazy))
+
+        let lease = try await mgr.acquire("a")
+        await lease.release()
+        try await Task.sleep(for: .seconds(0.3))
+        #expect(await mgr.currentlyLoaded() == ["a"])
+        #expect(await counter.count == 0)
+    }
+
+    /// Lazy mode disables the idle timer but must still honour the memory
+    /// budget — `lastReleasedAt` is updated even when no timer is scheduled
+    /// so `lruKey()` can pick a victim when a new load needs room.
+    @Test func lazyModeStillEvictsOnBudgetPressure() async throws {
+        let counter = UnloadCounter()
+        let reg = try registryWith([
+            descriptor("a", sizeGB: 8),
+            descriptor("b", sizeGB: 8),
+            descriptor("c", sizeGB: 8),
+        ])
+        let mgr = ModelManager(
+            registry: reg,
+            factory: StubFactory(unloaded: counter),
+            settings: .init(
+                memoryBudget: 16 * 1_073_741_824, idleTimeout: 3600, maxConcurrent: nil,
+                cleanupMode: .lazy))
+
+        let leaseA = try await mgr.acquire("a")
+        await leaseA.release()
+        let leaseB = try await mgr.acquire("b")
+        await leaseB.release()
+        // Loading `c` must evict the LRU (`a`), even though no idle timer ran.
+        let leaseC = try await mgr.acquire("c")
+        let loaded = await mgr.currentlyLoaded()
+        #expect(loaded.contains("b"))
+        #expect(loaded.contains("c"))
+        #expect(!loaded.contains("a"))
+        #expect(await counter.count == 1)
+        await leaseC.release()
+    }
 }

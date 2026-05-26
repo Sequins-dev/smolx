@@ -24,9 +24,20 @@ struct ModelLease: Sendable {
 /// cancelled if a new `acquire` re-claims the entry before it fires.
 actor ModelManager {
     struct Settings: Sendable {
+        /// Controls whether models get unloaded on idle timeout. `lazy` keeps
+        /// every loaded model resident until memory budget or max-concurrent
+        /// forces eviction; `aggressive` (the default) schedules a per-model
+        /// idle-unload timer on every release-to-zero. `--idle-timeout` is
+        /// only consulted in aggressive mode.
+        enum CleanupMode: String, Sendable, CaseIterable {
+            case lazy
+            case aggressive
+        }
+
         var memoryBudget: Int64
         var idleTimeout: TimeInterval
         var maxConcurrent: Int?
+        var cleanupMode: CleanupMode = .aggressive
 
         /// Default budget = total physical RAM. The manager won't kick out
         /// models proactively until that ceiling is hit; callers who want
@@ -38,7 +49,8 @@ actor ModelManager {
         static let `default` = Settings(
             memoryBudget: SystemMemory.physicalBytes,
             idleTimeout: 120,
-            maxConcurrent: nil)
+            maxConcurrent: nil,
+            cleanupMode: .aggressive)
     }
 
     /// Manager-owned bookkeeping per loaded model. `activeRequests` is the ref
@@ -197,9 +209,16 @@ actor ModelManager {
         assert(entry.activeRequests > 0, "release without matching acquire for \(name)")
         entry.activeRequests = max(0, entry.activeRequests - 1)
         if entry.activeRequests == 0 {
+            // `lastReleasedAt` updates in both modes — `lruKey()` reads it to
+            // pick eviction victims under memory pressure even when the idle
+            // timer is disabled. Only the timer itself is gated.
             entry.lastReleasedAt = Date()
             entry.idleUnloadTask?.cancel()
-            entry.idleUnloadTask = scheduleIdleUnload(name: name)
+            if settings.cleanupMode == .aggressive {
+                entry.idleUnloadTask = scheduleIdleUnload(name: name)
+            } else {
+                entry.idleUnloadTask = nil
+            }
         }
         loaded[name] = entry
     }
