@@ -8,6 +8,17 @@ protocol ProviderFactory: Sendable {
     func make(_ descriptor: ModelDescriptor) async throws -> any ModelProvider
 }
 
+/// Source of "currently available system memory" readings. Pulled into a
+/// protocol so tests can stub the value rather than depending on whatever
+/// the host happens to have free at test time.
+protocol MemoryStats: Sendable {
+    var availableBytes: Int64 { get }
+}
+
+struct SystemMemoryStats: MemoryStats {
+    var availableBytes: Int64 { SystemMemory.availableBytes }
+}
+
 /// Handle returned by `ModelManager.acquire`. Holds the loaded provider and a
 /// one-shot `release` closure the caller must invoke when done. Release
 /// decrements the entry's ref count; when the count hits zero the manager
@@ -24,21 +35,23 @@ struct ModelLease: Sendable {
 /// cancelled if a new `acquire` re-claims the entry before it fires.
 actor ModelManager {
     struct Settings: Sendable {
-        var memoryBudget: Int64
+        /// Minimum bytes of OS-available memory to maintain. The manager
+        /// evicts loaded models whenever loading more or background drift
+        /// would push available memory below this floor — replaces the
+        /// older static "budget" with a dynamic check against whatever the
+        /// system actually has free right now.
+        var keepFreeBytes: Int64
         /// When non-nil, the manager schedules a per-model unload task this
         /// many seconds after the last lease is released. When nil, models
-        /// stay resident until `memoryBudget` or `maxConcurrent` forces an
-        /// eviction (lazy mode — the default).
+        /// stay resident until the keep-free floor forces eviction.
         var idleTimeout: TimeInterval?
         var maxConcurrent: Int?
+        /// Source of "available memory" readings. Defaults to live Mach VM
+        /// stats; tests inject a stub.
+        var stats: any MemoryStats = SystemMemoryStats()
 
-        /// Default budget = total physical RAM and no idle timer. The
-        /// manager won't kick out models proactively until that ceiling is
-        /// hit; callers who want guaranteed headroom for the OS should
-        /// override via `--memory-budget`. Set `idleTimeout` (e.g. via
-        /// `--idle-timeout 2m`) to opt into idle eviction.
         static let `default` = Settings(
-            memoryBudget: SystemMemory.physicalBytes,
+            keepFreeBytes: 1_073_741_824,  // 1 GB
             idleTimeout: nil,
             maxConcurrent: nil)
     }
@@ -67,6 +80,11 @@ actor ModelManager {
     private var inflightLoads: [String: Task<Void, Error>] = [:]
     private var settings: Settings
     private var memoryMonitor: MemoryMonitor?
+    /// Background poller that evicts an LRU model when the system's
+    /// available memory falls below `settings.keepFreeBytes`. macOS's
+    /// dispatch pressure events fire too late (compressor is already
+    /// running by `.warning`); this catches drift between load events.
+    private var floorWatcher: Task<Void, Never>?
 
     init(
         registry: ModelRegistry,
@@ -88,16 +106,39 @@ actor ModelManager {
         }
         monitor.start()
         memoryMonitor = monitor
+
+        floorWatcher = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if Task.isCancelled { return }
+                await self?.evictIfBelowFloor()
+            }
+        }
     }
 
     func stop() async {
         memoryMonitor?.stop()
         memoryMonitor = nil
+        floorWatcher?.cancel()
+        floorWatcher = nil
         for (_, entry) in loaded {
             entry.idleUnloadTask?.cancel()
             await entry.provider.unload()
         }
         loaded.removeAll()
+    }
+
+    /// Single eviction step when available memory drops below the floor.
+    /// Called from the periodic watcher; returning quickly is more important
+    /// than recovering exactly to the floor in one tick — the next tick
+    /// will evict again if we're still under. `internal` rather than
+    /// `private` so tests can drive it deterministically.
+    func evictIfBelowFloor() async {
+        guard !loaded.isEmpty else { return }
+        let available = settings.stats.availableBytes
+        if available < settings.keepFreeBytes {
+            await evictOneLRU(reason: "keep-free-poll")
+        }
     }
 
     // MARK: - Acquisition
@@ -156,11 +197,13 @@ actor ModelManager {
         }
         logger.info("Loading model \(descriptor.name)")
         let provider = try await factory.make(descriptor)
-        // activeRequests starts at 0; both the initiator and any joiners
-        // will bumpRefCount on resume.
+        // Read the provider's actual resident bytes after load — MLXProvider
+        // updates it to observed `MLX.Memory.activeMemory` delta, which is
+        // closer to truth than the on-disk quantized weight size.
+        let actualBytes = await provider.residentBytes
         loaded[name] = Entry(
             provider: provider,
-            sizeHint: descriptor.diskSizeBytes,
+            sizeHint: actualBytes,
             lastReleasedAt: Date(),
             activeRequests: 0,
             idleUnloadTask: nil)
@@ -231,10 +274,17 @@ actor ModelManager {
     // MARK: - Eviction
 
     private func makeRoom(for needed: Int64) async {
-        while currentResidentBytes() + needed > settings.memoryBudget,
+        // Evict while loading `needed` more bytes would push OS-available
+        // memory below the configured floor. `availableBytes` already
+        // accounts for every loaded model — they're in the in-use total —
+        // so the check is just `available - needed < keepFreeBytes`. After
+        // each eviction we re-read `availableBytes` because the unloaded
+        // model's GPU buffers return to the OS (via MLX.Memory.clearCache in
+        // MLXProvider.unload).
+        while settings.stats.availableBytes - needed < settings.keepFreeBytes,
             !loaded.isEmpty
         {
-            await evictOneLRU(reason: "budget")
+            await evictOneLRU(reason: "keep-free")
         }
     }
 

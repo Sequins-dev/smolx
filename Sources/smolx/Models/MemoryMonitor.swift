@@ -1,3 +1,4 @@
+import Darwin
 import Dispatch
 import Foundation
 
@@ -33,6 +34,31 @@ final class MemoryMonitor: @unchecked Sendable {
 enum SystemMemory {
     static var physicalBytes: Int64 {
         Int64(ProcessInfo.processInfo.physicalMemory)
+    }
+
+    /// Bytes the kernel can hand out without paging — sum of free + inactive
+    /// + speculative pages × page size. Reads `vm_statistics64` via
+    /// `host_statistics64(HOST_VM_INFO64)`. Inactive pages are reclaimable
+    /// file-cache pages that the kernel will repurpose before swapping, so
+    /// including them matches the "available memory" semantics Activity
+    /// Monitor uses. Falls back to a conservative `physicalBytes / 4` if the
+    /// Mach call fails.
+    static var availableBytes: Int64 {
+        var stats = vm_statistics64_data_t()
+        var size = mach_msg_type_number_t(
+            MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &stats) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(size)) { intPtr in
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &size)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return physicalBytes / 4 }
+        // `vm_page_size` is a global var (set once at process init); use the
+        // libc accessor instead to keep Swift 6 strict-concurrency happy.
+        let pageSize = Int64(getpagesize())
+        let available =
+            Int64(stats.free_count) + Int64(stats.inactive_count) + Int64(stats.speculative_count)
+        return available * pageSize
     }
 
     /// Parses values like "32GB", "512MB", "2147483648". Falls back to nil if

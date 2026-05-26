@@ -24,13 +24,15 @@ struct ServeCommand: AsyncParsableCommand {
 
     @Option(
         name: .long,
-        help: "Maximum bytes resident across all loaded models. Accepts e.g. '32GB' or raw bytes.")
-    var memoryBudget: String?
+        help:
+            "Evict loaded models whenever system available memory drops below this floor (e.g. '1GB', '512MB'). Default: 1GB."
+    )
+    var keepFree: String?
 
     @Option(
         name: .long,
         help:
-            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). When unset, models stay resident until --memory-budget or --max-concurrent forces eviction."
+            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). When unset, models stay resident until --keep-free or --max-concurrent forces eviction."
     )
     var idleTimeout: String?
 
@@ -38,35 +40,24 @@ struct ServeCommand: AsyncParsableCommand {
     var maxConcurrent: Int?
 
     func run() async throws {
-        // Install a hard SIGINT/SIGTERM handler before anything else so the
-        // user can Ctrl+C the server reliably. Hummingbird's `runService`
-        // does install signal handlers via swift-service-lifecycle, but they
-        // were not bringing this process down in practice — our long-lived
-        // ModelManager actor + MLX's internal threads were keeping the
-        // process alive past `runService` returning. `Darwin.exit(0)` from
-        // a signal handler is a sledgehammer but guaranteed to terminate the
-        // process: it skips Swift-level deferred cleanup, but for a stateless
-        // HTTP server with model state in MLX's GPU memory (reclaimed by the
-        // OS on exit) that's fine. The handler is set on both SIGINT (Ctrl+C
-        // from the controlling TTY) and SIGTERM (sent by `kill`).
-        signal(SIGINT) { _ in
-            // Stay async-signal-safe: write() not print(), then _exit.
-            let msg = "\nsmolx: shutting down on SIGINT\n"
-            _ = msg.withCString { write(STDERR_FILENO, $0, strlen($0)) }
-            Darwin._exit(0)
-        }
-        signal(SIGTERM) { _ in
-            let msg = "\nsmolx: shutting down on SIGTERM\n"
-            _ = msg.withCString { write(STDERR_FILENO, $0, strlen($0)) }
-            Darwin._exit(0)
-        }
+        // Hard-kill on Ctrl+C / kill. We can't rely on a raw `signal(SIGINT,
+        // ...)` handler because Hummingbird's `runService` calls
+        // `signal(SIGINT, SIG_IGN)` via swift-service-lifecycle and replaces
+        // ours with a DispatchSource — which then stalls when its queue is
+        // busy (e.g. during MLX generation). The textbook fix is to block
+        // SIGINT/SIGTERM in every thread and have one dedicated POSIX thread
+        // `sigwait()` for them. The kernel routes blocked signals to whichever
+        // thread is sigwaiting, so it always wins — even when Hummingbird's
+        // dispatch queue is wedged. `_exit(0)` skips Swift cleanup, which is
+        // fine: the OS reclaims MLX GPU memory on process death.
+        installHardKillThread()
 
         let logger = Logger(label: "smolx")
         let registry = ModelRegistry()
 
         var settings = ModelManager.Settings.default
-        if let b = memoryBudget, let bytes = SystemMemory.parse(b) {
-            settings.memoryBudget = bytes
+        if let s = keepFree, let bytes = SystemMemory.parse(s) {
+            settings.keepFreeBytes = bytes
         }
         if let raw = idleTimeout, let secs = SystemMemory.parseDuration(raw) {
             settings.idleTimeout = secs
@@ -86,5 +77,43 @@ struct ServeCommand: AsyncParsableCommand {
             manager: manager,
             registry: registry,
             logger: logger)
+    }
+}
+
+/// Block SIGINT/SIGTERM in the calling thread (and all threads spawned
+/// after — `pthread_sigmask` is inherited) and spawn a detached pthread
+/// that `sigwait()`s for them. On signal it writes a one-line shutdown
+/// notice to stderr (async-signal-safe `write`, not `print`) and calls
+/// `_exit(0)`. This sidesteps Hummingbird/swift-service-lifecycle's
+/// DispatchSource signal handling entirely — the kernel delivers blocked
+/// signals to whatever thread is sigwaiting, so dispatch-queue stalls
+/// can no longer keep the process alive.
+private func installHardKillThread() {
+    var set = sigset_t()
+    sigemptyset(&set)
+    sigaddset(&set, SIGINT)
+    sigaddset(&set, SIGTERM)
+    pthread_sigmask(SIG_BLOCK, &set, nil)
+
+    // pthread_create takes a single `void*` context. Allocate the signal
+    // set on the heap and hand the pointer to the thread; the thread owns
+    // the allocation for its lifetime (which ends at _exit, so we don't
+    // bother freeing).
+    let pset = UnsafeMutablePointer<sigset_t>.allocate(capacity: 1)
+    pset.initialize(to: set)
+
+    var tid = pthread_t(bitPattern: 0)
+    let rc = pthread_create(
+        &tid, nil,
+        { ctx in
+            let set = ctx.assumingMemoryBound(to: sigset_t.self)
+            var caught: Int32 = 0
+            sigwait(set, &caught)
+            let msg = "\nsmolx: shutting down on signal \(caught)\n"
+            _ = msg.withCString { write(STDERR_FILENO, $0, strlen($0)) }
+            Darwin._exit(0)
+        }, pset)
+    if rc == 0, let tid {
+        pthread_detach(tid)
     }
 }
