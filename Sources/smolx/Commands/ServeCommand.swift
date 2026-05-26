@@ -32,7 +32,7 @@ struct ServeCommand: AsyncParsableCommand {
     @Option(
         name: .long,
         help:
-            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). When unset, models stay resident until --keep-free or --max-concurrent forces eviction."
+            "Unload a model this long after the last active request releases it (e.g. '30s', '2m', '10m'). Default: 30s."
     )
     var idleTimeout: String?
 

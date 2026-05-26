@@ -52,7 +52,7 @@ actor ModelManager {
 
         static let `default` = Settings(
             keepFreeBytes: 1_073_741_824,  // 1 GB
-            idleTimeout: nil,
+            idleTimeout: 30,
             maxConcurrent: nil)
     }
 
