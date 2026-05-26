@@ -3,12 +3,6 @@ import Darwin
 import Foundation
 import Logging
 
-// ArgumentParser auto-derives parsing for RawRepresentable types via a
-// default `init?(argument:)` on `ExpressibleByArgument`, but only when the
-// conformance is declared. Declaring it here (rather than next to the enum
-// in ModelManager.swift) avoids dragging ArgumentParser into the model layer.
-extension ModelManager.Settings.CleanupMode: ExpressibleByArgument {}
-
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
@@ -36,19 +30,12 @@ struct ServeCommand: AsyncParsableCommand {
     @Option(
         name: .long,
         help:
-            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). The clock only starts when no connections remain."
+            "Unload a model this long after the last active request releases it (e.g. '2m', '10m'). When unset, models stay resident until --memory-budget or --max-concurrent forces eviction."
     )
-    var idleTimeout: String = "2m"
+    var idleTimeout: String?
 
     @Option(name: .long, help: "Cap on the number of models that can be resident at once.")
     var maxConcurrent: Int?
-
-    @Option(
-        name: .long,
-        help:
-            "Cleanup policy: 'aggressive' unloads idle models after --idle-timeout (default); 'lazy' keeps them resident until budget or --max-concurrent forces eviction (idle timer disabled)."
-    )
-    var cleanupMode: ModelManager.Settings.CleanupMode = .aggressive
 
     func run() async throws {
         // Install a hard SIGINT/SIGTERM handler before anything else so the
@@ -81,11 +68,10 @@ struct ServeCommand: AsyncParsableCommand {
         if let b = memoryBudget, let bytes = SystemMemory.parse(b) {
             settings.memoryBudget = bytes
         }
-        if let secs = SystemMemory.parseDuration(idleTimeout) {
+        if let raw = idleTimeout, let secs = SystemMemory.parseDuration(raw) {
             settings.idleTimeout = secs
         }
         settings.maxConcurrent = maxConcurrent
-        settings.cleanupMode = cleanupMode
 
         let manager = ModelManager(
             registry: registry,

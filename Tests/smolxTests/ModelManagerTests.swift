@@ -265,20 +265,19 @@ struct ModelManagerTests {
         await lease2.release()
     }
 
-    // MARK: - Cleanup mode
+    // MARK: - Lazy mode (idleTimeout = nil)
 
-    /// In `lazy` mode the per-release idle timer is never scheduled, so a
-    /// released model stays resident past the timeout window. Only budget /
-    /// max-concurrent eviction can unload it.
-    @Test func lazyModeSkipsIdleEviction() async throws {
+    /// With no idle timeout configured, a released model stays resident — no
+    /// per-release timer is scheduled. Only budget / max-concurrent eviction
+    /// can unload it.
+    @Test func noIdleTimeoutKeepsModelResident() async throws {
         let counter = UnloadCounter()
         let reg = try registryWith([descriptor("a", sizeGB: 1)])
         let mgr = ModelManager(
             registry: reg,
             factory: StubFactory(unloaded: counter),
             settings: .init(
-                memoryBudget: 1024 * 1_073_741_824, idleTimeout: 0.05, maxConcurrent: nil,
-                cleanupMode: .lazy))
+                memoryBudget: 1024 * 1_073_741_824, idleTimeout: nil, maxConcurrent: nil))
 
         let lease = try await mgr.acquire("a")
         await lease.release()
@@ -287,10 +286,10 @@ struct ModelManagerTests {
         #expect(await counter.count == 0)
     }
 
-    /// Lazy mode disables the idle timer but must still honour the memory
-    /// budget — `lastReleasedAt` is updated even when no timer is scheduled
-    /// so `lruKey()` can pick a victim when a new load needs room.
-    @Test func lazyModeStillEvictsOnBudgetPressure() async throws {
+    /// Lazy mode (no idle timer) must still honour the memory budget —
+    /// `lastReleasedAt` is updated even when no timer is scheduled so
+    /// `lruKey()` can pick a victim when a new load needs room.
+    @Test func noIdleTimeoutStillEvictsOnBudgetPressure() async throws {
         let counter = UnloadCounter()
         let reg = try registryWith([
             descriptor("a", sizeGB: 8),
@@ -301,8 +300,7 @@ struct ModelManagerTests {
             registry: reg,
             factory: StubFactory(unloaded: counter),
             settings: .init(
-                memoryBudget: 16 * 1_073_741_824, idleTimeout: 3600, maxConcurrent: nil,
-                cleanupMode: .lazy))
+                memoryBudget: 16 * 1_073_741_824, idleTimeout: nil, maxConcurrent: nil))
 
         let leaseA = try await mgr.acquire("a")
         await leaseA.release()

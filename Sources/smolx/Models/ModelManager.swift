@@ -24,33 +24,23 @@ struct ModelLease: Sendable {
 /// cancelled if a new `acquire` re-claims the entry before it fires.
 actor ModelManager {
     struct Settings: Sendable {
-        /// Controls whether models get unloaded on idle timeout. `lazy` keeps
-        /// every loaded model resident until memory budget or max-concurrent
-        /// forces eviction; `aggressive` (the default) schedules a per-model
-        /// idle-unload timer on every release-to-zero. `--idle-timeout` is
-        /// only consulted in aggressive mode.
-        enum CleanupMode: String, Sendable, CaseIterable {
-            case lazy
-            case aggressive
-        }
-
         var memoryBudget: Int64
-        var idleTimeout: TimeInterval
+        /// When non-nil, the manager schedules a per-model unload task this
+        /// many seconds after the last lease is released. When nil, models
+        /// stay resident until `memoryBudget` or `maxConcurrent` forces an
+        /// eviction (lazy mode — the default).
+        var idleTimeout: TimeInterval?
         var maxConcurrent: Int?
-        var cleanupMode: CleanupMode = .aggressive
 
-        /// Default budget = total physical RAM. The manager won't kick out
-        /// models proactively until that ceiling is hit; callers who want
-        /// guaranteed headroom for the OS should override via `--memory-budget`.
-        /// The idle timeout is short because the clock only starts counting
-        /// after the last active request releases — a 2-minute grace window
-        /// comfortably covers conversational pauses between user turns
-        /// without holding GPU memory for stale sessions.
+        /// Default budget = total physical RAM and no idle timer. The
+        /// manager won't kick out models proactively until that ceiling is
+        /// hit; callers who want guaranteed headroom for the OS should
+        /// override via `--memory-budget`. Set `idleTimeout` (e.g. via
+        /// `--idle-timeout 2m`) to opt into idle eviction.
         static let `default` = Settings(
             memoryBudget: SystemMemory.physicalBytes,
-            idleTimeout: 120,
-            maxConcurrent: nil,
-            cleanupMode: .aggressive)
+            idleTimeout: nil,
+            maxConcurrent: nil)
     }
 
     /// Manager-owned bookkeeping per loaded model. `activeRequests` is the ref
@@ -209,13 +199,13 @@ actor ModelManager {
         assert(entry.activeRequests > 0, "release without matching acquire for \(name)")
         entry.activeRequests = max(0, entry.activeRequests - 1)
         if entry.activeRequests == 0 {
-            // `lastReleasedAt` updates in both modes — `lruKey()` reads it to
-            // pick eviction victims under memory pressure even when the idle
-            // timer is disabled. Only the timer itself is gated.
+            // `lastReleasedAt` updates whether or not the idle timer is
+            // enabled — `lruKey()` reads it to pick eviction victims under
+            // memory pressure even in lazy mode. Only the timer is gated.
             entry.lastReleasedAt = Date()
             entry.idleUnloadTask?.cancel()
-            if settings.cleanupMode == .aggressive {
-                entry.idleUnloadTask = scheduleIdleUnload(name: name)
+            if let timeout = settings.idleTimeout {
+                entry.idleUnloadTask = scheduleIdleUnload(name: name, timeout: timeout)
             } else {
                 entry.idleUnloadTask = nil
             }
@@ -223,9 +213,8 @@ actor ModelManager {
         loaded[name] = entry
     }
 
-    private func scheduleIdleUnload(name: String) -> Task<Void, Never> {
-        let timeout = settings.idleTimeout
-        return Task { [weak self] in
+    private func scheduleIdleUnload(name: String, timeout: TimeInterval) -> Task<Void, Never> {
+        Task { [weak self] in
             try? await Task.sleep(for: .seconds(timeout))
             if Task.isCancelled { return }
             await self?.idleUnloadIfStillIdle(name: name)
