@@ -29,6 +29,12 @@ actor MLXProvider: ModelProvider {
     /// `MLX.Memory.activeMemory` total.
     private var loadTask: Task<(ModelContainer, Int64), Error>?
     private let logger: Logger
+    /// Stable wired-memory policy for this model, created once on load and
+    /// used to wire model weights into RAM on every generate() call. A single
+    /// policy instance lets WiredMemoryManager group all concurrent tickets
+    /// from this provider under the same policy, so the manager computes one
+    /// aggregate limit rather than adding duplicates.
+    private var wiredPolicy: MLX.WiredSumPolicy?
 
     init(descriptor: ModelDescriptor, logger: Logger = Logger(label: "smolx.mlx")) {
         self.descriptor = descriptor
@@ -90,6 +96,7 @@ actor MLXProvider: ModelProvider {
             let (c, delta) = try await task.value
             container = c
             if delta > 0 { residentBytes = delta }
+            wiredPolicy = MLX.WiredSumPolicy()
             loadTask = nil
             return c
         } catch {
@@ -119,6 +126,7 @@ actor MLXProvider: ModelProvider {
         let wasLoaded = container != nil
         container = nil
         loadTask = nil
+        wiredPolicy = nil
         let before = MLX.Memory.activeMemory
         MLX.Memory.clearCache()
         let after = MLX.Memory.activeMemory
@@ -165,8 +173,12 @@ actor MLXProvider: ModelProvider {
                     let messagesCopy = messages
                     let capability = descriptor.capability
                     let repoId = descriptor.repoId
+                    let wiredPolicy = await self.wiredPolicy
+                    let residentBytes = await self.residentBytes
+                    let wiredTicket = wiredPolicy.map { $0.ticket(size: Int(residentBytes)) }
 
-                    let emittedToolCall: Bool = try await container.perform { context in
+                    let emittedToolCall: Bool = try await Self.withOptionalWiredLimit(wiredTicket) {
+                        try await container.perform { context in
                         let collectedImages = Self.collectImages(
                             from: messagesCopy, capability: capability)
                         let userInput = UserInput(
@@ -280,7 +292,8 @@ actor MLXProvider: ModelProvider {
                                 "tool_call": "\(emittedToolCall)",
                             ])
                         return emittedToolCall
-                    }
+                        }  // container.perform
+                    }  // withOptionalWiredLimit
 
                     // Release KV cache and other temporary buffers from this
                     // generation. `container.perform` has returned, so kvCache
@@ -358,7 +371,24 @@ actor MLXProvider: ModelProvider {
         if let tp = p.topP { params.topP = Float(tp) }
         if let k = p.topK { params.topK = k }
         if let mt = p.maxTokens { params.maxTokens = mt }
+        // 4-bit KV cache quantization: reduces attention memory bandwidth per
+        // decode step, which is the throughput bottleneck on Apple Silicon.
+        params.kvBits = 4
+        // Larger prefill batch keeps GPU better saturated on long prompts;
+        // python mlx-lm defaults to 2048, 1024 is a safe middle ground.
+        params.prefillStepSize = 1024
         return params
+    }
+
+    /// Runs `body` under a wired memory ticket when one is provided, otherwise
+    /// runs `body` directly. This avoids duplicating the (large) `container.perform`
+    /// closure when wired memory management is available.
+    private static func withOptionalWiredLimit<R: Sendable>(
+        _ ticket: WiredMemoryTicket?,
+        _ body: () async throws -> R
+    ) async throws -> R {
+        guard let ticket else { return try await body() }
+        return try await ticket.withWiredLimit { try await body() }
     }
 
     /// Convert our domain `ToolDefinition`s to MLX's `ToolSpec` dict format,
