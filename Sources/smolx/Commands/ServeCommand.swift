@@ -39,6 +39,9 @@ struct ServeCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Cap on the number of models that can be resident at once.")
     var maxConcurrent: Int?
 
+    @Flag(name: .shortAndLong, help: "Increase log verbosity (-v: debug, -vv: trace).")
+    var verbose: Int
+
     func run() async throws {
         // Hard-kill on Ctrl+C / kill. We can't rely on a raw `signal(SIGINT,
         // ...)` handler because Hummingbird's `runService` calls
@@ -51,6 +54,13 @@ struct ServeCommand: AsyncParsableCommand {
         // dispatch queue is wedged. `_exit(0)` skips Swift cleanup, which is
         // fine: the OS reclaims MLX GPU memory on process death.
         installHardKillThread()
+
+        let level: Logger.Level = verbose >= 2 ? .trace : (verbose >= 1 ? .debug : .info)
+        LoggingSystem.bootstrap { label in
+            var h = StreamLogHandler.standardOutput(label: label)
+            h.logLevel = level
+            return h
+        }
 
         let logger = Logger(label: "smolx")
         let registry = ModelRegistry()

@@ -24,7 +24,10 @@ actor MLXProvider: ModelProvider {
     /// weights in GPU memory). The earlier `ensureLoaded()` approach raced
     /// because actor isolation releases at the `await loadModelContainer(...)`
     /// suspension — two concurrent callers both saw `container == nil`.
-    private var loadTask: Task<ModelContainer, Error>?
+    /// Returns `(container, activeMemoryDelta)` so the caller can update
+    /// `residentBytes` from a true measurement rather than the misleading
+    /// `MLX.Memory.activeMemory` total.
+    private var loadTask: Task<(ModelContainer, Int64), Error>?
     private let logger: Logger
 
     init(descriptor: ModelDescriptor, logger: Logger = Logger(label: "smolx.mlx")) {
@@ -47,29 +50,35 @@ actor MLXProvider: ModelProvider {
     private func loadIfNeeded() async throws -> ModelContainer {
         if let c = container { return c }
         if let t = loadTask {
-            return try await t.value
+            let (c, _) = try await t.value
+            return c
         }
-        let task = Task<ModelContainer, Error> { [descriptor, logger] in
+        let task = Task<(ModelContainer, Int64), Error> { [descriptor, logger] in
             let directory = URL(fileURLWithPath: descriptor.localPath)
             logger.info("Loading MLX model from \(directory.path)")
             let before = MLX.Memory.activeMemory
             let tokenizerLoader = #huggingFaceTokenizerLoader()
             do {
                 let c = try await loadModelContainer(from: directory, using: tokenizerLoader)
+                // Release temporary buffers that MLX accumulated during weight
+                // loading/dequantization. For large quantized models these can
+                // be many times the on-disk size; clearCache() only frees the
+                // pool entries that are no longer referenced (cached, not active),
+                // so the loaded weights themselves are unaffected.
+                MLX.Memory.clearCache()
                 let after = MLX.Memory.activeMemory
-                let delta = Int64(after - before)
+                let delta = after >= before ? Int64(after - before) : 0
                 logger.info("Loaded \(descriptor.name) — resident: \(delta / (1024 * 1024)) MB")
-                return c
+                return (c, delta)
             } catch {
                 throw ProviderError.loadFailed("\(error)")
             }
         }
         loadTask = task
         do {
-            let c = try await task.value
+            let (c, delta) = try await task.value
             container = c
-            let delta = Int64(MLX.Memory.activeMemory)
-            if delta > 0 { residentBytes = max(residentBytes, delta) }
+            if delta > 0 { residentBytes = delta }
             loadTask = nil
             return c
         } catch {
@@ -149,11 +158,28 @@ actor MLXProvider: ModelProvider {
                     let emittedToolCall: Bool = try await container.perform { context in
                         let collectedImages = Self.collectImages(
                             from: messagesCopy, capability: capability)
+                        // Qwen3 chat templates default enable_thinking=true, which injects
+                        // a <think>…</think> reasoning block as plain text into the stream.
+                        // Clients treat that as the assistant reply, corrupting subsequent
+                        // turns. Disable it unconditionally for serving.
+                        let additionalContext: [String: any Sendable]? =
+                            repoId.lowercased().contains("qwen3")
+                            ? ["enable_thinking": false] : nil
                         let userInput = UserInput(
                             messages: dictMessages,
                             images: collectedImages,
-                            tools: toolSpecs)
+                            tools: toolSpecs,
+                            additionalContext: additionalContext)
                         let input = try await context.processor.prepare(input: userInput)
+
+                        let promptTokens = input.text.tokens.size
+                        logger.debug(
+                            "Generation starting",
+                            metadata: [
+                                "model": "\(descriptor.name)",
+                                "prompt_tokens": "\(promptTokens)",
+                            ])
+                        let genStart = Date()
 
                         let kvCache = context.model.newCache(parameters: generateParameters)
                         let iterator = try TokenIterator(
@@ -161,7 +187,7 @@ actor MLXProvider: ModelProvider {
                             cache: kvCache, parameters: generateParameters)
 
                         let (stream, generationTask) = MLXLMCommon.generateTask(
-                            promptTokenCount: input.text.tokens.size,
+                            promptTokenCount: promptTokens,
                             modelConfiguration: context.configuration,
                             tokenizer: context.tokenizer,
                             iterator: iterator)
@@ -170,27 +196,27 @@ actor MLXProvider: ModelProvider {
                             repoId.lowercased().contains("gpt-oss")
                             ? HarmonyParser() : nil
                         var emittedToolCall = false
-                        let debug = Self.debugRawEnabled
+                        var genTokens = 0
 
                         for await detail in stream {
                             if Task.isCancelled { break }
                             switch detail {
                             case .chunk(let s) where !s.isEmpty:
-                                if debug { logger.info("RAW chunk: \(s.debugDescription)") }
+                                logger.trace("RAW chunk: \(s.debugDescription)")
                                 if let harmony {
                                     for event in harmony.feed(s) {
-                                        if debug { logger.info("HARMONY event: \(String(describing: event))") }
+                                        logger.trace("HARMONY event: \(String(describing: event))")
                                         Self.relay(event, &emittedToolCall, continuation)
                                     }
                                 } else {
+                                    genTokens += 1
                                     continuation.yield(.textDelta(s))
                                 }
                             case .chunk:
                                 break
                             case .toolCall(let tc):
-                                if debug {
-                                    logger.info("RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)")
-                                }
+                                logger.trace(
+                                    "RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)")
                                 emittedToolCall = true
                                 let id = "toolu_\(UUID().uuidString.prefix(16))"
                                 continuation.yield(.toolUseStart(id: String(id), name: tc.function.name))
@@ -206,17 +232,34 @@ actor MLXProvider: ModelProvider {
 
                         if let harmony {
                             for event in harmony.flush() {
-                                if debug { logger.info("HARMONY flush event: \(String(describing: event))") }
+                                logger.trace("HARMONY flush: \(String(describing: event))")
                                 Self.relay(event, &emittedToolCall, continuation)
                             }
                         }
+
+                        let ms = Int(Date().timeIntervalSince(genStart) * 1000)
+                        logger.debug(
+                            "Generation done",
+                            metadata: [
+                                "model": "\(descriptor.name)",
+                                "prompt_tokens": "\(promptTokens)",
+                                "gen_tokens": "\(genTokens)",
+                                "ms": "\(ms)",
+                                "tool_call": "\(emittedToolCall)",
+                            ])
                         return emittedToolCall
                     }
 
+                    // Release KV cache and other temporary buffers from this
+                    // generation. `container.perform` has returned, so kvCache
+                    // and iterator are out of scope and in MLX's pool; without
+                    // this call the pool grows with every request.
+                    MLX.Memory.clearCache()
                     let reason: FinishReason = emittedToolCall ? .toolCalls : .stop
                     continuation.yield(.done(finishReason: reason, usage: nil))
                     continuation.finish()
                 } catch {
+                    MLX.Memory.clearCache()
                     logger.error("Generation failed for \(descriptor.name): \(error)")
                     continuation.finish(throwing: error)
                 }
@@ -224,16 +267,6 @@ actor MLXProvider: ModelProvider {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
-
-    /// Set `MLX_SERVE_DEBUG_RAW=1` in the server's env to dump every raw
-    /// chunk + Harmony parser event to the logger. The value is read once
-    /// at first access so toggling it requires a server restart — that's
-    /// fine; it's a developer-only knob for diagnosing tool-call surfacing
-    /// when the model output format doesn't match parser assumptions.
-    private static let debugRawEnabled: Bool = {
-        let v = ProcessInfo.processInfo.environment["MLX_SERVE_DEBUG_RAW"] ?? ""
-        return v == "1" || v.lowercased() == "true"
-    }()
 
     /// Pulls `UserInput.Image` instances out of every image content block
     /// across all messages (only when the model declares vision capability).
@@ -356,6 +389,16 @@ actor MLXProvider: ModelProvider {
 /// via `inflightLoads`.
 struct MLXProviderFactory: ProviderFactory {
     func make(_ descriptor: ModelDescriptor) async throws -> any ModelProvider {
+        // MLX's default cache limit scales with Metal's recommendedMaxWorkingSetSize
+        // — on machines with large RAM this can exceed 100 GB. KV cache buffers
+        // grow with context length and are different sizes on every step, so old
+        // cached buffers are never reusable and just pile up until the machine
+        // OOMs. Capping the cache means MLX evicts stale buffers on the next
+        // allocation rather than hoarding them indefinitely. 512 MB is enough to
+        // cover reusable fixed-size intermediate computation buffers without the
+        // runaway growth. clearCache() calls still drain whatever is cached at
+        // that moment; the limit prevents it from refilling unboundedly.
+        Memory.cacheLimit = 512 * 1024 * 1024
         let provider = MLXProvider(descriptor: descriptor)
         try await provider.load()
         return provider

@@ -229,6 +229,7 @@ actor ModelManager {
         entry.idleUnloadTask = nil
         entry.activeRequests += 1
         loaded[name] = entry
+        logger.debug("Acquired \(name) — active=\(entry.activeRequests)")
     }
 
     private func makeLease(name: String, provider: any ModelProvider) -> ModelLease {
@@ -241,6 +242,7 @@ actor ModelManager {
         guard var entry = loaded[name] else { return }
         assert(entry.activeRequests > 0, "release without matching acquire for \(name)")
         entry.activeRequests = max(0, entry.activeRequests - 1)
+        logger.debug("Released \(name) — active=\(entry.activeRequests)")
         if entry.activeRequests == 0 {
             // `lastReleasedAt` updates whether or not the idle timer is
             // enabled — `lruKey()` reads it to pick eviction victims under

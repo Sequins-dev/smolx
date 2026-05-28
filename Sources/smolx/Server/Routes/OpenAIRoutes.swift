@@ -28,6 +28,7 @@ enum OpenAIRoutes {
 
         // POST /v1/chat/completions
         router.post("/v1/chat/completions") { request, context -> Response in
+            let rid = reqId()
             let req: OpenAI.ChatCompletionRequest
             do {
                 req = try await request.decode(
@@ -41,6 +42,18 @@ enum OpenAIRoutes {
             } catch {
                 return errorResponse(.badRequest, message: "\(error)")
             }
+
+            logger.debug(
+                "request_started",
+                metadata: [
+                    "req_id": "\(rid)", "route": "POST /v1/chat/completions",
+                    "model": "\(decoded.model)",
+                    "messages": "\(decoded.messages.count)",
+                    "tools": "\(decoded.tools.count)",
+                    "stream": "\(decoded.params.stream)",
+                    "params": "\(summarize(decoded.params))",
+                ])
+            logger.trace("request_messages req_id=\(rid)\n\(summarize(decoded.messages))")
 
             let lease: ModelLease
             do {
@@ -69,6 +82,7 @@ enum OpenAIRoutes {
                     decoded: decoded,
                     completionId: completionId,
                     model: model,
+                    rid: rid,
                     logger: logger)
             } else {
                 return await bufferedResponse(
@@ -76,6 +90,7 @@ enum OpenAIRoutes {
                     decoded: decoded,
                     completionId: completionId,
                     model: model,
+                    rid: rid,
                     logger: logger)
             }
         }
@@ -88,6 +103,7 @@ enum OpenAIRoutes {
         decoded: OpenAITranslator.DecodedRequest,
         completionId: String,
         model: String,
+        rid: String,
         logger: Logger
     ) -> Response {
         let stream = lease.provider.generate(
@@ -96,10 +112,19 @@ enum OpenAIRoutes {
             toolChoice: decoded.toolChoice,
             params: decoded.params)
         let body = ResponseBody { writer in
+            let start = Date()
+            var finishReason: FinishReason = .stop
+            var toolCallCount = 0
             do {
                 let state = OpenAITranslator.StreamState()
                 var isFirst = true
                 for try await event in stream {
+                    logger.trace("event req_id=\(rid) \(describe(event))")
+                    switch event {
+                    case .toolUseStart: toolCallCount += 1
+                    case .done(let r, _): finishReason = r
+                    default: break
+                    }
                     if let chunk = OpenAITranslator.chunkFor(
                         event: event, id: completionId, model: model,
                         state: state, isFirst: isFirst)
@@ -117,6 +142,13 @@ enum OpenAIRoutes {
                 try? await writer.write(SSE.dataFrame(payload))
                 try? await writer.finish(nil)
             }
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            logger.debug(
+                "request_completed",
+                metadata: [
+                    "req_id": "\(rid)", "finish_reason": "\(finishReason.rawValue)",
+                    "tool_calls": "\(toolCallCount)", "total_ms": "\(ms)",
+                ])
             await lease.release()
         }
         return Response(status: .ok, headers: SSE.headers, body: body)
@@ -129,10 +161,12 @@ enum OpenAIRoutes {
         decoded: OpenAITranslator.DecodedRequest,
         completionId: String,
         model: String,
+        rid: String,
         logger: Logger
     ) async -> Response {
         // Detached so the sync defer can perform the async release. Captures
         // `lease` (Sendable); runs once on any function-exit path.
+        let start = Date()
         defer { Task { await lease.release() } }
 
         var fullText = ""
@@ -148,6 +182,7 @@ enum OpenAIRoutes {
             params: decoded.params)
         do {
             for try await event in stream {
+                logger.trace("event req_id=\(rid) \(describe(event))")
                 switch event {
                 case .textDelta(let s): fullText += s
                 case .toolUseStart(let id, let name):
@@ -171,6 +206,14 @@ enum OpenAIRoutes {
             logger.error("Generation failed: \(error)")
             return errorResponse(.internalServerError, message: "\(error)")
         }
+
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.debug(
+            "request_completed",
+            metadata: [
+                "req_id": "\(rid)", "finish_reason": "\(finishReason.rawValue)",
+                "tool_calls": "\(toolCalls.count)", "total_ms": "\(ms)",
+            ])
 
         let payload = OpenAITranslator.finalResponse(
             id: completionId, model: model,

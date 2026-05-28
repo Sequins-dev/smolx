@@ -13,6 +13,7 @@ enum AnthropicRoutes {
         logger: Logger
     ) {
         router.post("/v1/messages") { request, context -> Response in
+            let rid = reqId()
             let req: Anthropic.MessagesRequest
             do {
                 req = try await request.decode(
@@ -26,6 +27,18 @@ enum AnthropicRoutes {
             } catch {
                 return OpenAIRoutes.errorResponse(.badRequest, message: "\(error)")
             }
+
+            logger.debug(
+                "request_started",
+                metadata: [
+                    "req_id": "\(rid)", "route": "POST /v1/messages",
+                    "model": "\(decoded.model)",
+                    "messages": "\(decoded.messages.count)",
+                    "tools": "\(decoded.tools.count)",
+                    "stream": "\(decoded.params.stream)",
+                    "params": "\(summarize(decoded.params))",
+                ])
+            logger.trace("request_messages req_id=\(rid)\n\(summarize(decoded.messages))")
 
             let lease: ModelLease
             do {
@@ -50,11 +63,11 @@ enum AnthropicRoutes {
             if decoded.params.stream {
                 return streamingResponse(
                     lease: lease, decoded: decoded,
-                    messageId: messageId, logger: logger)
+                    messageId: messageId, rid: rid, logger: logger)
             } else {
                 return await bufferedResponse(
                     lease: lease, decoded: decoded,
-                    messageId: messageId, logger: logger)
+                    messageId: messageId, rid: rid, logger: logger)
             }
         }
     }
@@ -65,6 +78,7 @@ enum AnthropicRoutes {
         lease: ModelLease,
         decoded: AnthropicTranslator.DecodedRequest,
         messageId: String,
+        rid: String,
         logger: Logger
     ) -> Response {
         let stream = lease.provider.generate(
@@ -73,6 +87,9 @@ enum AnthropicRoutes {
             toolChoice: decoded.toolChoice,
             params: decoded.params)
         let body = ResponseBody { writer in
+            let start = Date()
+            var finishReason: FinishReason = .stop
+            var toolCallCount = 0
             do {
                 let state = AnthropicTranslator.StreamState(
                     messageId: messageId, model: decoded.model)
@@ -82,6 +99,12 @@ enum AnthropicRoutes {
                             event: frame.event, json: frame.jsonData))
                 }
                 for try await event in stream {
+                    logger.trace("event req_id=\(rid) \(describe(event))")
+                    switch event {
+                    case .toolUseStart: toolCallCount += 1
+                    case .done(let r, _): finishReason = r
+                    default: break
+                    }
                     for frame in try AnthropicTranslator.frames(for: event, state: state) {
                         try await writer.write(
                             SSE.namedEventFrame(
@@ -99,6 +122,13 @@ enum AnthropicRoutes {
                 }
                 try? await writer.finish(nil)
             }
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            logger.debug(
+                "request_completed",
+                metadata: [
+                    "req_id": "\(rid)", "finish_reason": "\(finishReason.rawValue)",
+                    "tool_calls": "\(toolCallCount)", "total_ms": "\(ms)",
+                ])
             await lease.release()
         }
         return Response(status: .ok, headers: SSE.headers, body: body)
@@ -110,8 +140,10 @@ enum AnthropicRoutes {
         lease: ModelLease,
         decoded: AnthropicTranslator.DecodedRequest,
         messageId: String,
+        rid: String,
         logger: Logger
     ) async -> Response {
+        let start = Date()
         defer { Task { await lease.release() } }
 
         var fullText = ""
@@ -127,6 +159,7 @@ enum AnthropicRoutes {
             params: decoded.params)
         do {
             for try await event in stream {
+                logger.trace("event req_id=\(rid) \(describe(event))")
                 switch event {
                 case .textDelta(let s): fullText += s
                 case .toolUseStart(let id, let name):
@@ -150,6 +183,14 @@ enum AnthropicRoutes {
             logger.error("Generation failed: \(error)")
             return OpenAIRoutes.errorResponse(.internalServerError, message: "\(error)")
         }
+
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.debug(
+            "request_completed",
+            metadata: [
+                "req_id": "\(rid)", "finish_reason": "\(finishReason.rawValue)",
+                "tool_calls": "\(toolCalls.count)", "total_ms": "\(ms)",
+            ])
 
         let payload = AnthropicTranslator.finalResponse(
             id: messageId, model: decoded.model,

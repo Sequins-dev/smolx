@@ -36,29 +36,27 @@ enum SystemMemory {
         Int64(ProcessInfo.processInfo.physicalMemory)
     }
 
-    /// Bytes the kernel can hand out without paging — sum of free + inactive
-    /// + speculative pages × page size. Reads `vm_statistics64` via
-    /// `host_statistics64(HOST_VM_INFO64)`. Inactive pages are reclaimable
-    /// file-cache pages that the kernel will repurpose before swapping, so
-    /// including them matches the "available memory" semantics Activity
-    /// Monitor uses. Falls back to a conservative `physicalBytes / 4` if the
-    /// Mach call fails.
+    /// Bytes remaining before we hit the machine's physical RAM ceiling, from
+    /// this process's perspective. Uses `task_vm_info.phys_footprint` rather
+    /// than `vm_statistics64` page counts because on Apple Silicon, Metal/GPU
+    /// allocations go through IOKit and are invisible to the VM page counters —
+    /// causing the floor-watcher to never see real pressure from MLX. The Mach
+    /// `phys_footprint` field is what Activity Monitor uses for the Memory column
+    /// on M-series Macs, and it correctly includes unified-memory GPU buffers.
+    /// Result is `physicalBytes − footprint`; ignoring other processes is an
+    /// acceptable trade-off for a dedicated model server. Falls back to
+    /// `physicalBytes / 4` if the Mach call fails.
     static var availableBytes: Int64 {
-        var stats = vm_statistics64_data_t()
-        var size = mach_msg_type_number_t(
-            MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
-        let kr = withUnsafeMutablePointer(to: &stats) { ptr -> kern_return_t in
-            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(size)) { intPtr in
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &size)
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(count)) { intPtr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPtr, &count)
             }
         }
         guard kr == KERN_SUCCESS else { return physicalBytes / 4 }
-        // `vm_page_size` is a global var (set once at process init); use the
-        // libc accessor instead to keep Swift 6 strict-concurrency happy.
-        let pageSize = Int64(getpagesize())
-        let available =
-            Int64(stats.free_count) + Int64(stats.inactive_count) + Int64(stats.speculative_count)
-        return available * pageSize
+        return max(0, physicalBytes - Int64(info.phys_footprint))
     }
 
     /// Parses values like "32GB", "512MB", "2147483648". Falls back to nil if

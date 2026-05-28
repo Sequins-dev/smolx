@@ -18,6 +18,7 @@ enum OpenAIResponsesRoute {
         logger: Logger
     ) {
         router.post("/v1/responses") { request, context -> Response in
+            let rid = reqId()
             let req: OpenAIResponses.Request
             do {
                 req = try await request.decode(
@@ -31,6 +32,18 @@ enum OpenAIResponsesRoute {
             } catch {
                 return OpenAIRoutes.errorResponse(.badRequest, message: "\(error)")
             }
+
+            logger.debug(
+                "request_started",
+                metadata: [
+                    "req_id": "\(rid)", "route": "POST /v1/responses",
+                    "model": "\(decoded.model)",
+                    "messages": "\(decoded.messages.count)",
+                    "tools": "\(decoded.tools.count)",
+                    "stream": "\(decoded.params.stream)",
+                    "params": "\(summarize(decoded.params))",
+                ])
+            logger.trace("request_messages req_id=\(rid)\n\(summarize(decoded.messages))")
 
             let lease: ModelLease
             do {
@@ -55,11 +68,11 @@ enum OpenAIResponsesRoute {
             if decoded.params.stream {
                 return streamingResponse(
                     lease: lease, decoded: decoded,
-                    responseId: responseId, logger: logger)
+                    responseId: responseId, rid: rid, logger: logger)
             } else {
                 return await bufferedResponse(
                     lease: lease, decoded: decoded,
-                    responseId: responseId, logger: logger)
+                    responseId: responseId, rid: rid, logger: logger)
             }
         }
     }
@@ -70,6 +83,7 @@ enum OpenAIResponsesRoute {
         lease: ModelLease,
         decoded: ResponsesTranslator.DecodedRequest,
         responseId: String,
+        rid: String,
         logger: Logger
     ) -> Response {
         let stream = lease.provider.generate(
@@ -78,6 +92,9 @@ enum OpenAIResponsesRoute {
             toolChoice: decoded.toolChoice,
             params: decoded.params)
         let body = ResponseBody { writer in
+            let start = Date()
+            var finishReason: FinishReason = .stop
+            var toolCallCount = 0
             do {
                 let state = ResponsesTranslator.StreamState(
                     responseId: responseId, model: decoded.model)
@@ -87,6 +104,12 @@ enum OpenAIResponsesRoute {
                             event: frame.event, json: frame.jsonData))
                 }
                 for try await event in stream {
+                    logger.trace("event req_id=\(rid) \(describe(event))")
+                    switch event {
+                    case .toolUseStart: toolCallCount += 1
+                    case .done(let r, _): finishReason = r
+                    default: break
+                    }
                     for frame in try ResponsesTranslator.frames(for: event, state: state) {
                         try await writer.write(
                             SSE.namedEventFrame(
@@ -98,6 +121,13 @@ enum OpenAIResponsesRoute {
                 logger.error("Streaming failed: \(error)")
                 try? await writer.finish(nil)
             }
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            logger.debug(
+                "request_completed",
+                metadata: [
+                    "req_id": "\(rid)", "finish_reason": "\(finishReason.rawValue)",
+                    "tool_calls": "\(toolCallCount)", "total_ms": "\(ms)",
+                ])
             await lease.release()
         }
         return Response(status: .ok, headers: SSE.headers, body: body)
@@ -109,8 +139,10 @@ enum OpenAIResponsesRoute {
         lease: ModelLease,
         decoded: ResponsesTranslator.DecodedRequest,
         responseId: String,
+        rid: String,
         logger: Logger
     ) async -> Response {
+        let start = Date()
         defer { Task { await lease.release() } }
 
         var fullText = ""
@@ -125,6 +157,7 @@ enum OpenAIResponsesRoute {
             params: decoded.params)
         do {
             for try await event in stream {
+                logger.trace("event req_id=\(rid) \(describe(event))")
                 switch event {
                 case .textDelta(let s): fullText += s
                 case .toolUseStart(let id, let name):
@@ -147,6 +180,14 @@ enum OpenAIResponsesRoute {
             logger.error("Generation failed: \(error)")
             return OpenAIRoutes.errorResponse(.internalServerError, message: "\(error)")
         }
+
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.debug(
+            "request_completed",
+            metadata: [
+                "req_id": "\(rid)", "finish_reason": "stop",
+                "tool_calls": "\(toolCalls.count)", "total_ms": "\(ms)",
+            ])
 
         let payload = ResponsesTranslator.finalResponse(
             id: responseId, model: decoded.model,
