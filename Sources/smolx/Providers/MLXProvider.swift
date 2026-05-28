@@ -56,10 +56,21 @@ actor MLXProvider: ModelProvider {
         let task = Task<(ModelContainer, Int64), Error> { [descriptor, logger] in
             let directory = URL(fileURLWithPath: descriptor.localPath)
             logger.info("Loading MLX model from \(directory.path)")
+
+            // mtp.safetensors holds Multi-Token Prediction weights used only
+            // during training. mlx-swift-lm's loadWeights() scans every
+            // *.safetensors file in the directory; finding keys that match
+            // "mtp.*" makes it conclude hasMTPWeights=true and shift all
+            // RMSNorm weights by +1, corrupting inference. Load from a temp
+            // directory of hard links that excludes the file.
+            let loadDirectory = Self.makeLoadDirectory(
+                from: directory, excluding: ["mtp.safetensors"], logger: logger)
+            defer { Self.cleanLoadDirectory(loadDirectory) }
+
             let before = MLX.Memory.activeMemory
             let tokenizerLoader = #huggingFaceTokenizerLoader()
             do {
-                let c = try await loadModelContainer(from: directory, using: tokenizerLoader)
+                let c = try await loadModelContainer(from: loadDirectory, using: tokenizerLoader)
                 // Release temporary buffers that MLX accumulated during weight
                 // loading/dequantization. For large quantized models these can
                 // be many times the on-disk size; clearCache() only frees the
@@ -158,18 +169,11 @@ actor MLXProvider: ModelProvider {
                     let emittedToolCall: Bool = try await container.perform { context in
                         let collectedImages = Self.collectImages(
                             from: messagesCopy, capability: capability)
-                        // Qwen3 chat templates default enable_thinking=true, which injects
-                        // a <think>…</think> reasoning block as plain text into the stream.
-                        // Clients treat that as the assistant reply, corrupting subsequent
-                        // turns. Disable it unconditionally for serving.
-                        let additionalContext: [String: any Sendable]? =
-                            repoId.lowercased().contains("qwen3")
-                            ? ["enable_thinking": false] : nil
                         let userInput = UserInput(
                             messages: dictMessages,
                             images: collectedImages,
                             tools: toolSpecs,
-                            additionalContext: additionalContext)
+                            additionalContext: nil)
                         let input = try await context.processor.prepare(input: userInput)
 
                         let promptTokens = input.text.tokens.size
@@ -195,6 +199,11 @@ actor MLXProvider: ModelProvider {
                         let harmony: HarmonyParser? =
                             repoId.lowercased().contains("gpt-oss")
                             ? HarmonyParser() : nil
+                        // Qwen3 models always open with a <think>…</think> block before the
+                        // real response. Let the model think normally (its trained behavior),
+                        // then swallow that block so clients never see it.
+                        var thinkingState: ThinkingState =
+                            repoId.lowercased().contains("qwen3") ? .inThinking : .passthrough
                         var emittedToolCall = false
                         var genTokens = 0
 
@@ -209,12 +218,35 @@ actor MLXProvider: ModelProvider {
                                         Self.relay(event, &emittedToolCall, continuation)
                                     }
                                 } else {
-                                    genTokens += 1
-                                    continuation.yield(.textDelta(s))
+                                    switch thinkingState {
+                                    case .inThinking:
+                                        if let range = s.range(of: "</think>") {
+                                            let after = String(s[range.upperBound...])
+                                                .drop(while: { $0.isNewline || $0 == " " || $0 == "\r" })
+                                            if after.isEmpty {
+                                                thinkingState = .skipWhitespace
+                                            } else {
+                                                thinkingState = .passthrough
+                                                genTokens += 1
+                                                continuation.yield(.textDelta(String(after)))
+                                            }
+                                        }
+                                        // else: still inside thinking block, swallow
+                                    case .skipWhitespace:
+                                        if !s.allSatisfy({ $0.isWhitespace }) {
+                                            thinkingState = .passthrough
+                                            genTokens += 1
+                                            continuation.yield(.textDelta(s))
+                                        }
+                                    case .passthrough:
+                                        genTokens += 1
+                                        continuation.yield(.textDelta(s))
+                                    }
                                 }
                             case .chunk:
                                 break
                             case .toolCall(let tc):
+                                guard thinkingState == .passthrough else { break }
                                 logger.trace(
                                     "RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)")
                                 emittedToolCall = true
@@ -324,6 +356,7 @@ actor MLXProvider: ModelProvider {
         var params = GenerateParameters()
         if let t = p.temperature { params.temperature = Float(t) }
         if let tp = p.topP { params.topP = Float(tp) }
+        if let k = p.topK { params.topK = k }
         if let mt = p.maxTokens { params.maxTokens = mt }
         return params
     }
@@ -378,6 +411,62 @@ actor MLXProvider: ModelProvider {
             return out
         }
     }
+
+    // MARK: - Load-directory helpers
+
+    /// Creates a temp directory populated with hard links to every file in
+    /// `source` except those whose names appear in `excluded`. Hard links are
+    /// instantaneous and use no extra disk space; they keep the original files
+    /// untouched. Returns `source` unchanged if no excluded files are present.
+    private static func makeLoadDirectory(
+        from source: URL,
+        excluding excluded: Set<String>,
+        logger: Logger
+    ) -> URL {
+        let fm = FileManager.default
+        let present = (try? fm.contentsOfDirectory(atPath: source.path)) ?? []
+        guard present.contains(where: { excluded.contains($0) }) else { return source }
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("smolx-load-\(UUID().uuidString)")
+        guard (try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)) != nil
+        else { return source }
+
+        var failed = false
+        for name in present where !excluded.contains(name) {
+            let src = source.appendingPathComponent(name)
+            let dst = tmp.appendingPathComponent(name)
+            do {
+                try fm.linkItem(at: src, to: dst)
+            } catch {
+                logger.warning("Could not hard-link \(name) for load: \(error)")
+                failed = true
+                break
+            }
+        }
+
+        if failed {
+            try? fm.removeItem(at: tmp)
+            return source
+        }
+
+        logger.debug(
+            "Loading \(source.lastPathComponent) from temp directory (excluded: \(excluded.sorted().joined(separator: ", ")))"
+        )
+        return tmp
+    }
+
+    private static func cleanLoadDirectory(_ dir: URL) {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        guard dir.path.hasPrefix(tmp.path) else { return }
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+private enum ThinkingState: Equatable {
+    case inThinking
+    case skipWhitespace
+    case passthrough
 }
 
 /// Default factory used by `ModelManager.start()` in `smolx serve`.
