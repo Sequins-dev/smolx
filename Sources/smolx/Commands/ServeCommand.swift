@@ -64,6 +64,7 @@ struct ServeCommand: AsyncParsableCommand {
 
         let logger = Logger(label: "smolx")
         let registry = ModelRegistry()
+        CodexCatalog.write((try? registry.load()) ?? [], logger: logger)
 
         var settings = ModelManager.Settings.default
         if let s = keepFree, let bytes = SystemMemory.parse(s) {

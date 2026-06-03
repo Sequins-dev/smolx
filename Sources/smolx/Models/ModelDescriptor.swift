@@ -20,4 +20,18 @@ struct ModelDescriptor: Codable, Sendable, Equatable {
         case text
         case vision
     }
+
+    /// Maximum context length read from the model's `config.json`.
+    /// Returns `nil` when the file is absent or the key is missing.
+    var contextLength: Int? {
+        let url = URL(fileURLWithPath: localPath).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: url),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        // VL model: nested under "language_model"
+        if let lm = json["language_model"] as? [String: Any],
+            let v = lm["max_position_embeddings"] as? Int { return v }
+        // Text-only model: top-level
+        return json["max_position_embeddings"] as? Int
+    }
 }
