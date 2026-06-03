@@ -258,7 +258,12 @@ actor MLXProvider: ModelProvider {
                             case .chunk:
                                 break
                             case .toolCall(let tc):
-                                guard thinkingState == .passthrough else { break }
+                                // Block tool calls only while still inside the
+                                // thinking block. Qwen3 jumps directly from
+                                // </think> to a tool call with no text between
+                                // them, so .skipWhitespace must also be allowed.
+                                guard thinkingState != .inThinking else { break }
+                                thinkingState = .passthrough
                                 logger.trace(
                                     "RAW toolCall: \(tc.function.name) args=\(tc.function.arguments)")
                                 emittedToolCall = true
