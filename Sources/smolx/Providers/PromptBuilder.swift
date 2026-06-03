@@ -18,15 +18,32 @@ enum PromptBuilder {
 
     /// Build the model-dict array for the chat template.
     static func messageDicts(from messages: [ChatMessage]) -> [MLXLMCommon.Message] {
-        // We emit at most one dict per input message — assistant messages
-        // that carry both text and tool_use blocks collapse into a single
-        // dict with `content` set to the text (or empty string) and
-        // `tool_calls` populated.
-        var out: [MLXLMCommon.Message] = []
+        // Some models (e.g. Qwen3) require the system message to be first and
+        // reject any system message that appears after position 0. Agentic
+        // clients like Codex replay full conversation history on every request
+        // and may inject system messages mid-sequence. Normalise by collecting
+        // all system content into a single leading system message so the
+        // template never sees a system message in the wrong position.
+        var systemParts: [String] = []
+        var rest: [MLXLMCommon.Message] = []
+
         for msg in messages {
-            let dict = dict(forMessage: msg)
-            if !dict.isEmpty { out.append(dict) }
+            if msg.role == .system {
+                let text = msg.content.compactMap {
+                    if case .text(let t) = $0 { return t } else { return nil }
+                }.joined(separator: "\n")
+                if !text.isEmpty { systemParts.append(text) }
+            } else {
+                let d = dict(forMessage: msg)
+                if !d.isEmpty { rest.append(d) }
+            }
         }
+
+        var out: [MLXLMCommon.Message] = []
+        if !systemParts.isEmpty {
+            out.append(["role": "system", "content": systemParts.joined(separator: "\n\n")])
+        }
+        out.append(contentsOf: rest)
         return out
     }
 
