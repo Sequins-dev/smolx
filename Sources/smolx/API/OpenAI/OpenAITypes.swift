@@ -289,10 +289,16 @@ enum OpenAI {
         var object: String = "model"
         var created: Int
         var ownedBy: String
+        /// Maximum tokens in the combined prompt + completion window.
+        var contextWindow: Int?
+        /// Maximum tokens the model can emit in a single response.
+        var maxOutputTokens: Int?
 
         enum CodingKeys: String, CodingKey {
             case id, object, created
             case ownedBy = "owned_by"
+            case contextWindow = "context_window"
+            case maxOutputTokens = "max_output_tokens"
         }
     }
 }

@@ -17,13 +17,19 @@ enum OpenAIRoutes {
             let models = (try? registry.load()) ?? []
             let now = Int(Date().timeIntervalSince1970)
             let payload = OpenAI.ModelsList(
-                data: models.map {
-                    OpenAI.ModelInfo(
-                        id: $0.name,
-                        created: Int($0.addedAt.timeIntervalSince1970),
-                        ownedBy: "smolx")
-                })
+                data: models.map { modelInfo(for: $0) })
             return try jsonResponse(payload, status: .ok, fallbackTime: now)
+        }
+
+        // GET /v1/models/:id — single model info (queried by Codex and other clients)
+        router.get("/v1/models/:id") { request, _ -> Response in
+            let id = request.uri.path.components(separatedBy: "/").last ?? ""
+            let models = (try? registry.load()) ?? []
+            guard let descriptor = models.first(where: { $0.name == id || $0.repoId == id }) else {
+                return errorResponse(.notFound, message: "Model '\(id)' not found")
+            }
+            let now = Int(Date().timeIntervalSince1970)
+            return try jsonResponse(modelInfo(for: descriptor), status: .ok, fallbackTime: now)
         }
 
         // POST /v1/chat/completions
@@ -224,6 +230,34 @@ enum OpenAIRoutes {
         } catch {
             return errorResponse(.internalServerError, message: "JSON encoding failed")
         }
+    }
+
+    // MARK: - Model info helpers
+
+    private static func modelInfo(for descriptor: ModelDescriptor) -> OpenAI.ModelInfo {
+        let ctx = contextLength(at: descriptor.localPath)
+        return OpenAI.ModelInfo(
+            id: descriptor.name,
+            created: Int(descriptor.addedAt.timeIntervalSince1970),
+            ownedBy: "smolx",
+            contextWindow: ctx,
+            maxOutputTokens: ctx)
+    }
+
+    /// Read `max_position_embeddings` from the model's config.json. For VL
+    /// models the value is nested under `language_model`; for text-only models
+    /// it sits at the top level. Returns nil when the file is absent or
+    /// the key is missing.
+    private static func contextLength(at localPath: String) -> Int? {
+        let url = URL(fileURLWithPath: localPath).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: url),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        // VL model: nested under "language_model"
+        if let lm = json["language_model"] as? [String: Any],
+            let v = lm["max_position_embeddings"] as? Int { return v }
+        // Text-only model: top-level
+        return json["max_position_embeddings"] as? Int
     }
 
     // MARK: - JSON helpers (shared across routes)
