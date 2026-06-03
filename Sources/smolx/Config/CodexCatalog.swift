@@ -1,12 +1,14 @@
 import Foundation
 import Logging
 
-/// Generates the model catalog file that Codex reads to resolve local model
-/// metadata (context window, modalities, tool support). Without this, Codex
-/// falls back to conservative defaults that starve thinking-heavy models.
+/// Generates a merged model catalog for Codex that combines the existing
+/// ~/.codex/models_cache.json (OpenAI models) with smolx's installed models.
 ///
-/// The catalog is written to ~/.smolx/codex-catalog.json. Point Codex at it
-/// with a one-time addition to ~/.codex/config.toml:
+/// Codex's `model_catalog_json` config key replaces the built-in catalog
+/// entirely, so we must include the existing models to preserve access to
+/// OpenAI models. The merged file is written to ~/.smolx/codex-catalog.json.
+///
+/// One-time setup: add this to ~/.codex/config.toml:
 ///   model_catalog_json = "/Users/<you>/.smolx/codex-catalog.json"
 enum CodexCatalog {
 
@@ -14,21 +16,46 @@ enum CodexCatalog {
         Paths.appRoot.appendingPathComponent("codex-catalog.json")
     }
 
+    static var cacheSourcePath: URL {
+        Paths.home.appendingPathComponent(".codex/models_cache.json")
+    }
+
     static func write(_ models: [ModelDescriptor], logger: Logger) {
-        let entries = models.map { entry(for: $0) }
-        let catalog: [String: Any] = ["models": entries]
+        // Load Codex's own model cache so we can merge into it. If it's
+        // absent (fresh install), start with an empty models array.
+        var existing: [[String: Any]] = []
+        if let data = try? Data(contentsOf: cacheSourcePath),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let cached = json["models"] as? [[String: Any]]
+        {
+            existing = cached
+        }
+
+        // Remove any previously-injected smolx entries so re-runs don't
+        // accumulate duplicates.
+        let smolxSlugs = Set(models.map { $0.name })
+        var merged = existing.filter { entry in
+            guard let slug = entry["slug"] as? String else { return true }
+            return !smolxSlugs.contains(slug)
+        }
+
+        // Append current smolx models.
+        for model in models {
+            merged.append(entry(for: model))
+        }
+
+        let catalog: [String: Any] = ["models": merged]
         guard let data = try? JSONSerialization.data(
             withJSONObject: catalog,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         else { return }
 
         try? Paths.ensureAppRoot()
+        guard (try? data.write(to: outputPath, options: .atomic)) != nil else { return }
 
-        if (try? data.write(to: outputPath, options: .atomic)) != nil {
-            let msg: Logger.Message =
-                "Codex catalog written to \(outputPath.path) — add to ~/.codex/config.toml: model_catalog_json = \"\(outputPath.path)\""
-            logger.info(msg)
-        }
+        let n = models.count
+        let p = outputPath.path
+        logger.info("Codex catalog written (\(n) smolx model(s) merged) — add to ~/.codex/config.toml: model_catalog_json = \"\(p)\"")
     }
 
     private static func entry(for d: ModelDescriptor) -> [String: Any] {
@@ -40,23 +67,13 @@ enum CodexCatalog {
             "slug": d.name,
             "display_name": d.name,
             "context_window": ctx,
-            "apply_patch_tool_type": "function",
-            "shell_type": "default",
+            "shell_type": "shell_command",
             "visibility": "list",
             "supported_in_api": true,
             "priority": 0,
-            "truncation_policy": [
-                "mode": "bytes",
-                "limit": 10_000,
-            ] as [String: Any],
             "input_modalities": modalities,
-            "base_instructions": "",
-            "support_verbosity": true,
-            "default_verbosity": "low",
             "supports_parallel_tool_calls": false,
-            "supports_reasoning_summaries": false,
             "supported_reasoning_levels": [] as [String],
-            "experimental_supported_tools": [] as [String],
         ]
     }
 }
