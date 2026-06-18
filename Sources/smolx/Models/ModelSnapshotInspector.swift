@@ -10,17 +10,7 @@ enum ModelSnapshotInspector {
     }
 
     static func contextLength(for descriptor: ModelDescriptor) -> Int? {
-        let directory = URL(fileURLWithPath: descriptor.localPath)
-        guard let context = contextLength(at: directory) else { return nil }
-
-        if descriptor.weightFormat == .gguf,
-            let slidingWindow = slidingWindow(at: directory),
-            slidingWindow > 0
-        {
-            return min(context, slidingWindow)
-        }
-
-        return context
+        contextLength(at: URL(fileURLWithPath: descriptor.localPath))
     }
 
     /// Maximum context length read from the model's `config.json`.
@@ -39,13 +29,6 @@ enum ModelSnapshotInspector {
             return value
         }
         return json["max_position_embeddings"] as? Int
-    }
-
-    private static func slidingWindow(at directory: URL) -> Int? {
-        guard let json = configJSON(at: directory),
-            let textConfig = json["text_config"] as? [String: Any]
-        else { return nil }
-        return textConfig["sliding_window"] as? Int
     }
 
     private static func configJSON(at directory: URL) -> [String: Any]? {

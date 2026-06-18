@@ -35,7 +35,7 @@ struct OpencodeAgent: AgentPlugin {
             : installedModels
         let modelsJSON = modelEntries.map { m in
             let context = Self.contextLimit(for: m)
-            let output = Self.outputLimit(for: m, context: context)
+            let output = Self.outputLimit(context: context)
             return """
               "\(m.name)": {
                 "id": "\(m.name)",
@@ -81,10 +81,7 @@ struct OpencodeAgent: AgentPlugin {
         ModelSnapshotInspector.contextLength(for: descriptor) ?? 32768
     }
 
-    private static func outputLimit(for descriptor: ModelDescriptor, context: Int) -> Int {
-        if descriptor.weightFormat == .gguf {
-            return min(GGUFPromptWindow.defaultMaxTokens, max(1, context - 1))
-        }
-        return min(4096, max(1, context - 1))
+    private static func outputLimit(context: Int) -> Int {
+        max(1, context - 1)
     }
 }

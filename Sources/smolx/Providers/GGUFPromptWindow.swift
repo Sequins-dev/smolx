@@ -1,7 +1,8 @@
 import Foundation
 
 enum GGUFPromptWindow {
-    static let defaultMaxTokens = 256
+    static let defaultMaxTokens = 4096
+    private static let smallContextCompletionDivisor = 4
 
     struct Adjustment: Equatable, Sendable {
         var promptTokenLimit: Int
@@ -15,10 +16,11 @@ enum GGUFPromptWindow {
         requestedMaxTokens: Int?
     ) -> Adjustment {
         let window = max(1, contextWindow)
-        let requested = requestedMaxTokens ?? defaultMaxTokens
+        let defaultBudget = min(defaultMaxTokens, max(1, window / smallContextCompletionDivisor))
+        let requested = requestedMaxTokens ?? defaultBudget
         let cappedRequest =
             requested >= window
-            ? defaultMaxTokens
+            ? defaultBudget
             : requested
         let maxTokens = min(max(1, cappedRequest), max(1, window - 1))
         let promptLimit = max(1, window - maxTokens)

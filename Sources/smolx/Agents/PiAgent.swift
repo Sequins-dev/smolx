@@ -30,8 +30,10 @@ struct PiAgent: AgentPlugin {
         let piOrdered = modelEntries.sorted { a, _ in a.name == models.smart ?? "" }
         let piModelsJSON = piOrdered.map { m in
             let inputs = m.capability == .vision ? "[\"text\", \"image\"]" : "[\"text\"]"
+            let context = Self.contextLimit(for: m)
+            let maxTokens = Self.maxTokens(context: context)
             return """
-                      { "id": "\(m.name)", "name": "\(m.name)", "input": \(inputs), "contextWindow": 32768, "maxTokens": 4096 }
+                      { "id": "\(m.name)", "name": "\(m.name)", "input": \(inputs), "contextWindow": \(context), "maxTokens": \(maxTokens) }
                 """
         }.joined(separator: ",\n")
         let piModelsConfig = """
@@ -53,5 +55,13 @@ struct PiAgent: AgentPlugin {
             env: ["PI_CODING_AGENT_DIR": piHome],
             prefixArgs: ["--provider", "smolx", "--model", models.smart ?? ""],
             files: [.init(path: piHome + "/models.json", contents: piModelsConfig)])
+    }
+
+    private static func contextLimit(for descriptor: ModelDescriptor) -> Int {
+        ModelSnapshotInspector.contextLength(for: descriptor) ?? 32768
+    }
+
+    private static func maxTokens(context: Int) -> Int {
+        max(1, context - 1)
     }
 }

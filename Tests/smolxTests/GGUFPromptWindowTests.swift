@@ -37,7 +37,7 @@ struct GGUFPromptWindowTests {
         #expect(adjustment.shouldTrim == true)
     }
 
-    @Test func usesDefaultCompletionBudgetWhenRequestOmitsMaxTokens() {
+    @Test func usesSmallDefaultCompletionBudgetWhenRequestOmitsMaxTokens() {
         let adjustment = GGUFPromptWindow.adjustment(
             promptTokens: 1400,
             contextWindow: 1024,
@@ -45,6 +45,28 @@ struct GGUFPromptWindowTests {
 
         #expect(adjustment.promptTokenLimit == 768)
         #expect(adjustment.maxTokens == 256)
+        #expect(adjustment.shouldTrim == true)
+    }
+
+    @Test func usesLargeDefaultCompletionBudgetForLargeContext() {
+        let adjustment = GGUFPromptWindow.adjustment(
+            promptTokens: 8000,
+            contextWindow: 262144,
+            requestedMaxTokens: nil)
+
+        #expect(adjustment.promptTokenLimit == 8000)
+        #expect(adjustment.maxTokens == 4096)
+        #expect(adjustment.shouldTrim == false)
+    }
+
+    @Test func reservesLargeRequestedCompletionBudgetForLargeContext() {
+        let adjustment = GGUFPromptWindow.adjustment(
+            promptTokens: 260000,
+            contextWindow: 262144,
+            requestedMaxTokens: 8192)
+
+        #expect(adjustment.promptTokenLimit == 253952)
+        #expect(adjustment.maxTokens == 8192)
         #expect(adjustment.shouldTrim == true)
     }
 

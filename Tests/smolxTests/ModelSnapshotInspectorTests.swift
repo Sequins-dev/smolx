@@ -39,7 +39,7 @@ struct ModelSnapshotInspectorTests {
         #expect(ModelSnapshotInspector.contextLength(at: dir) == 262144)
     }
 
-    @Test func ggufDescriptorUsesSlidingWindowEffectiveContext() throws {
+    @Test func ggufDescriptorUsesConfiguredMaxPositionEmbeddings() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try #"{"text_config":{"max_position_embeddings":262144,"sliding_window":1024}}"#
@@ -54,7 +54,7 @@ struct ModelSnapshotInspectorTests {
             weightFormat: .gguf,
             weightFile: "model.gguf")
 
-        #expect(ModelSnapshotInspector.contextLength(for: descriptor) == 1024)
+        #expect(ModelSnapshotInspector.contextLength(for: descriptor) == 262144)
     }
 
     @Test func contextLengthReturnsNilWhenMissing() throws {

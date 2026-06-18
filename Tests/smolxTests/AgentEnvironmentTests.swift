@@ -127,7 +127,7 @@ struct AgentEnvironmentTests {
         let config = """
             {
               "text_config": {
-                "max_position_embeddings": 131072,
+                "max_position_embeddings": 262144,
                 "sliding_window": 1024
               }
             }
@@ -145,7 +145,7 @@ struct AgentEnvironmentTests {
             authToken: "tok",
             installedModels: installed)
         let cfg = plan.env["OPENCODE_CONFIG_CONTENT"] ?? ""
-        #expect(cfg.contains("\"limit\": { \"context\": 1024, \"output\": 256 }"))
+        #expect(cfg.contains("\"limit\": { \"context\": 262144, \"output\": 262143 }"))
     }
 
     // MARK: - Pi
@@ -175,6 +175,8 @@ struct AgentEnvironmentTests {
         #expect(cfg.contains("\"api\": \"openai-completions\""))
         #expect(cfg.contains("http://127.0.0.1:8080/v1"))
         #expect(cfg.contains("\"apiKey\": \"secret\""))
+        #expect(cfg.contains("\"contextWindow\": 32768"))
+        #expect(cfg.contains("\"maxTokens\": 32767"))
         #expect(cfg.contains("\"a\""))
         #expect(cfg.contains("\"b\""))
         let posB = cfg.range(of: "\"id\": \"b\"")?.lowerBound
@@ -182,6 +184,37 @@ struct AgentEnvironmentTests {
         #expect(posB != nil && posA != nil)
         #expect(posB! < posA!)
         #expect(cfg.contains("\"image\""))
+    }
+
+    @Test func piPlanUsesInspectedModelLimits() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("smolx-pi-gguf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let config = """
+            {
+              "text_config": {
+                "max_position_embeddings": 262144,
+                "sliding_window": 1024
+              }
+            }
+            """
+        try config.write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let installed = [
+            ModelDescriptor(
+                name: "gguf-model", repoId: "x/g", localPath: directory.path,
+                capability: .text, diskSizeBytes: 100, addedAt: Date(), weightFormat: .gguf)
+        ]
+        let plan = PiAgent().plan(
+            baseURL: "http://127.0.0.1:8080",
+            models: UserConfig(smart: "gguf-model", fast: "gguf-model", small: "gguf-model"),
+            authToken: "secret",
+            installedModels: installed)
+        let cfg = plan.files.first { $0.path.hasSuffix("models.json") }?.contents ?? ""
+        #expect(cfg.contains("\"contextWindow\": 262144"))
+        #expect(cfg.contains("\"maxTokens\": 262143"))
     }
 
     // MARK: - Crush
