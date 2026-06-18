@@ -99,6 +99,57 @@ struct ToolSchemaNormalizerTests {
         ]))
     }
 
+    @Test func booleanPropertySchemasAreWrappedForGemmaTemplate() {
+        let schema = JSONValue.object([
+            "properties": .object([
+                "anything": .bool(true),
+                "list": .object([
+                    "items": .bool(true),
+                    "type": .string("array"),
+                ]),
+            ]),
+            "type": .string("object"),
+        ])
+
+        #expect(ToolSchemaNormalizer.normalize(schema) == .object([
+            "properties": .object([
+                "anything": .object([
+                    "type": .string("string")
+                ]),
+                "list": .object([
+                    "items": .object([
+                        "type": .string("string")
+                    ]),
+                    "type": .string("array"),
+                ]),
+            ]),
+            "type": .string("object"),
+        ]))
+    }
+
+    @Test func objectAdditionalPropertiesDoesNotTriggerGemmaFallback() {
+        let schema = JSONValue.object([
+            "properties": .object([
+                "metadata": .object([
+                    "additionalProperties": .bool(true),
+                    "type": .string("object"),
+                ]),
+            ]),
+            "type": .string("object"),
+        ])
+
+        #expect(ToolSchemaNormalizer.normalize(schema) == .object([
+            "properties": .object([
+                "metadata": .object([
+                    "additionalProperties": .bool(true),
+                    "properties": .object([:]),
+                    "type": .string("object"),
+                ]),
+            ]),
+            "type": .string("object"),
+        ]))
+    }
+
     @Test func missingObjectAndArrayTypesAreInferredForGemmaTemplate() {
         let schema = JSONValue.object([
             "type": .object([
@@ -136,6 +187,7 @@ struct ToolSchemaNormalizerTests {
                 ]),
                 "metadata": .object([
                     "additionalProperties": .object([:]),
+                    "properties": .object([:]),
                     "type": .string("object"),
                 ]),
             ]),

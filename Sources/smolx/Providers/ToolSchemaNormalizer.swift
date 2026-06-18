@@ -29,6 +29,12 @@ enum ToolSchemaNormalizer {
             normalized["type"] = inferredType(for: normalized)
         }
 
+        if normalized["type"] == .string("object"),
+            normalized["properties"] == nil
+        {
+            normalized["properties"] = .object([:])
+        }
+
         return normalized
     }
 
@@ -75,11 +81,24 @@ enum ToolSchemaNormalizer {
     private static func normalizeValue(_ value: JSONValue, forKey key: String) -> JSONValue {
         switch (key, value) {
         case ("properties", .object(let properties)):
-            return .object(properties.mapValues(normalize))
+            return .object(properties.mapValues(normalizeSchemaValue))
+        case ("items", _):
+            return normalizeSchemaValue(value)
         case ("additionalProperties", .object(let schema)) where schema.isEmpty:
             return value
         default:
             return normalize(value)
+        }
+    }
+
+    private static func normalizeSchemaValue(_ value: JSONValue) -> JSONValue {
+        switch value {
+        case .object:
+            return normalize(value)
+        default:
+            return .object([
+                "type": .string("string")
+            ])
         }
     }
 
