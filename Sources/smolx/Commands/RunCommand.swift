@@ -1,13 +1,14 @@
 import ArgumentParser
 import Darwin
 import Foundation
+import Logging
 
 struct RunCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
         abstract: "Launch an agent CLI with env vars pointing at the local smolx instance.",
         discussion: """
-            Supported agents: \(AgentEnvironment.Kind.allCases.map(\.rawValue).joined(separator: ", ")).
+            Supported agents: \(AgentRegistry.all.map(\.commandName).joined(separator: ", ")).
             Requires `smolx serve` to be already running (pass --no-check to skip the health probe).
             Pass agent-specific arguments after `--`, e.g.
               smolx run claude --model llama-3.2-3b -- "summarise this README"
@@ -20,7 +21,7 @@ struct RunCommand: AsyncParsableCommand {
     @Option(
         name: .long,
         help:
-            "Model to use for ALL tiers (sugar for setting --smart/--fast/--small to the same value). Persisted per-tier config still applies for tiers this doesn't override."
+            "Model to use for ALL tiers for this invocation. Per-tier flags like --smart override this for their tier."
     )
     var model: String?
 
@@ -62,8 +63,7 @@ struct RunCommand: AsyncParsableCommand {
         let userConfig = (try? UserConfig.load()) ?? UserConfig()
 
         guard
-            let models = ModelTuple.resolve(
-                config: userConfig,
+            let models = userConfig.resolve(
                 smartOverride: smart,
                 fastOverride: fast,
                 smallOverride: small,
@@ -79,7 +79,7 @@ struct RunCommand: AsyncParsableCommand {
         // Validate every resolved tier exists in the registry — refuse
         // to launch with a typo'd alias rather than letting the agent
         // surface "model not found" mid-session.
-        for alias in Set([models.smart, models.fast, models.small]) {
+        for alias in Set([models.smart, models.fast, models.small].compactMap { $0 }) {
             if try registry.find(alias) == nil {
                 FileHandle.standardError.write(
                     Data(
@@ -88,18 +88,18 @@ struct RunCommand: AsyncParsableCommand {
             }
         }
 
-        let plan: AgentEnvironment.Plan
-        do {
-            plan = try AgentEnvironment.plan(
-                agentName: agent,
-                baseURL: baseUrl,
-                models: models,
-                authToken: authToken,
-                installedModels: installedModels)
-        } catch {
-            FileHandle.standardError.write(Data("\(error)\n".utf8))
+        guard let plugin = AgentRegistry.find(named: agent) else {
+            let supported = AgentRegistry.all.map(\.commandName).joined(separator: ", ")
+            FileHandle.standardError.write(
+                Data("Unknown agent: \(agent). Supported: \(supported)\n".utf8))
             throw ExitCode.failure
         }
+
+        let plan = plugin.plan(
+            baseURL: baseUrl,
+            models: models,
+            authToken: authToken ?? "smolx-local",
+            installedModels: installedModels)
 
         // Health-check the server first so we fail fast with a clear error
         // instead of letting the agent hang waiting for a non-existent endpoint.
@@ -116,10 +116,7 @@ struct RunCommand: AsyncParsableCommand {
             }
         }
 
-        // Write any per-agent temp config files (e.g. opencode config,
-        // claude config-dir placeholder). These persist after we exec into
-        // the agent — `/tmp` cleanup is left to the OS. No `defer { remove }`
-        // here because exec replaces our process and defer wouldn't run anyway.
+        // Write any per-agent temp config files before exec.
         for file in plan.files {
             let parent = (file.path as NSString).deletingLastPathComponent
             do {
@@ -137,7 +134,11 @@ struct RunCommand: AsyncParsableCommand {
             }
         }
 
-        guard let executablePath = Self.resolveExecutable(plan.executable) else {
+        // Run the plugin's pre-exec setup hook (e.g. catalog generation).
+        let logger = Logger(label: "smolx")
+        plugin.setup(installedModels: installedModels, logger: logger)
+
+        guard let executablePath = Self.resolveExecutable(plan.executable, isAgent: true) else {
             FileHandle.standardError.write(
                 Data(
                     "Could not find `\(plan.executable)` on PATH. Install it and try again.\n".utf8))
@@ -159,7 +160,7 @@ struct RunCommand: AsyncParsableCommand {
 
     // MARK: - Helpers
 
-    private static func resolveExecutable(_ name: String) -> String? {
+    private static func resolveExecutable(_ name: String, isAgent: Bool) -> String? {
         let env = ProcessInfo.processInfo.environment
         let path = env["PATH"] ?? "/usr/bin:/bin:/usr/local/bin"
         let home = env["HOME"] ?? NSHomeDirectory()
@@ -171,12 +172,11 @@ struct RunCommand: AsyncParsableCommand {
         // we fall through to whatever the wrapper itself would have located:
         // the underlying real binary further down PATH. This matches the
         // wrapper's own `find_real_binary` strategy.
-        let isAgentName = AgentEnvironment.Kind(rawValue: name) != nil
         let supersetBin = "\(home)/.superset/bin"
 
         for dir in path.split(separator: ":") {
             let d = String(dir)
-            if isAgentName {
+            if isAgent {
                 if d == supersetBin || d.hasPrefix("\(home)/.superset-") {
                     continue
                 }
@@ -228,8 +228,6 @@ struct RunCommand: AsyncParsableCommand {
         let cEnvp: [UnsafeMutablePointer<CChar>?] =
             envStrings.map { strdup($0) } + [nil]
 
-        // Keep both buffers alive across the execve call by holding them in
-        // contiguous storage and passing the base pointers.
         var argvStorage = cArgv
         var envpStorage = cEnvp
         argvStorage.withUnsafeMutableBufferPointer { argvBuf in

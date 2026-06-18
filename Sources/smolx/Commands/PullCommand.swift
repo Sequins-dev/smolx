@@ -3,6 +3,12 @@ import Darwin
 import Foundation
 import HuggingFace
 
+extension ModelDescriptor.WeightFormat: ExpressibleByArgument {
+    init?(argument: String) {
+        self.init(rawValue: argument.lowercased())
+    }
+}
+
 struct PullCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "pull",
@@ -24,6 +30,15 @@ struct PullCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Number of files to download concurrently.")
     var parallel: Int = 4
 
+    @Option(name: .long, help: "Model weight format to install: mlx or gguf. Defaults to auto-detect.")
+    var format: ModelDescriptor.WeightFormat?
+
+    @Option(
+        name: .long,
+        help:
+            "GGUF filename or substring to select when --format gguf is used, e.g. Q4_K_M.")
+    var ggufFile: String?
+
     @Flag(name: .long, help: "Re-download even if the model is already registered.")
     var force: Bool = false
 
@@ -42,6 +57,12 @@ struct PullCommand: AsyncParsableCommand {
         case empty
     }
 
+    enum GGUFFileDecision: Equatable {
+        case selected(String)
+        case ambiguous([String])
+        case empty
+    }
+
     func run() async throws {
         let client = HubClient.default
         // Use `full=true` instead of `expand=...`. Two reasons:
@@ -56,7 +77,7 @@ struct PullCommand: AsyncParsableCommand {
         //      parallel only when the user passed `--expand`.
         let initialResponse = try await client.listModels(
             search: repoId,
-            filter: "mlx",
+            filter: format?.rawValue,
             limit: 20,
             full: true)
         let results = initialResponse.items
@@ -65,7 +86,7 @@ struct PullCommand: AsyncParsableCommand {
         switch Self.decide(input: repoId, results: results.map { $0.id.rawValue }) {
         case .empty:
             FileHandle.standardError.write(
-                Data("No MLX models match \"\(repoId)\".\n".utf8))
+                Data("No models match \"\(repoId)\".\n".utf8))
             throw ExitCode.failure
 
         case .exact(let id):
@@ -86,7 +107,8 @@ struct PullCommand: AsyncParsableCommand {
                 // from isn't worth 20 round-trips.
                 FileHandle.standardError.write(
                     Data(
-                        "Multiple MLX models match \"\(repoId)\":\n".utf8))
+                        "Multiple models match \"\(repoId)\":\n"
+                            .utf8))
                 let now = Date()
                 for p in pairs {
                     let meta = Self.formatRow(for: p.model, sizeBytes: nil, now: now)
@@ -142,36 +164,108 @@ struct PullCommand: AsyncParsableCommand {
         }
 
         let downloader = HubDownloader()
-        let tracker = ProgressTracker()
-        let renderer = ProgressRenderer(
-            tracker: tracker, repoId: resolvedRepoId, slots: parallel)
-        renderer.start()
+        let progress = DownloadProgress(repoId: resolvedRepoId, slots: parallel)
+        let repoFiles = try await listRepoFiles(repoId: resolvedRepoId)
+        let effectiveFormat = Self.decideWeightFormat(files: repoFiles, requested: format)
+        let selectedWeightFile =
+            effectiveFormat == .gguf
+            ? try resolveGGUFFile(repoId: resolvedRepoId, files: repoFiles)
+            : nil
 
-        let snapshotDir: URL
+        let result: DownloadResult
         do {
-            snapshotDir = try await downloader.download(
+            result = try await downloader.download(
                 repoId: resolvedRepoId,
+                format: effectiveFormat,
+                weightFile: selectedWeightFile,
                 parallelism: parallel,
-                tracker: tracker)
-            await renderer.stop(success: true)
+                progress: progress)
+            await progress.stop(success: true)
         } catch {
-            await renderer.stop(success: false)
+            await progress.stop(success: false)
             throw error
+        }
+
+        var installedBytes = result.totalBytes
+        if effectiveFormat == .gguf {
+            installedBytes += try await hydrateGGUFRuntimeFiles(
+                downloader: downloader,
+                repoId: resolvedRepoId,
+                snapshotURL: result.snapshotURL,
+                weightFile: selectedWeightFile)
         }
 
         let descriptor = ModelDescriptor(
             name: alias,
             repoId: resolvedRepoId,
-            localPath: snapshotDir.path,
-            capability: Self.detectCapability(at: snapshotDir),
-            diskSizeBytes: HubDownloader.Layout.diskSize(of: snapshotDir),
-            addedAt: Date())
+            localPath: result.snapshotURL.path,
+            capability: ModelSnapshotInspector.capability(at: result.snapshotURL),
+            diskSizeBytes: installedBytes,
+            addedAt: Date(),
+            weightFormat: effectiveFormat,
+            weightFile: selectedWeightFile)
         try registry.upsert(descriptor)
 
         print(
-            "Installed \(alias) (\(descriptor.capability.rawValue), \(Self.formatBytes(descriptor.diskSizeBytes)))"
+            "Installed \(alias) (\(descriptor.capability.rawValue), \(descriptor.weightFormat.rawValue), \(Bytes.format(descriptor.diskSizeBytes)))"
         )
         print("Path: \(descriptor.localPath)")
+    }
+
+    private func hydrateGGUFRuntimeFiles(
+        downloader: HubDownloader,
+        repoId: String,
+        snapshotURL: URL,
+        weightFile: String?
+    ) async throws -> Int64 {
+        let repo = try HubDownloader.parseRepoId(repoId)
+        let model = try await HubClient.default.getModel(repo, full: true, cardData: true)
+
+        var sidecarBytes: Int64 = 0
+        if let baseRepoId = GGUFRuntimeFiles.baseModelRepoId(from: model) {
+            print("Hydrating GGUF tokenizer files from \(baseRepoId)")
+            sidecarBytes = try await downloader.downloadSidecars(
+                repoId: baseRepoId,
+                paths: GGUFRuntimeFiles.tokenizerSidecarFilenames,
+                into: snapshotURL)
+        }
+
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        let configSizeBefore =
+            ((try? FileManager.default.attributesOfItem(atPath: configURL.path)[.size]) as? Int64) ?? 0
+        try GGUFRuntimeFiles.prepareSnapshot(at: snapshotURL, weightFile: weightFile)
+        let configSizeAfter =
+            ((try? FileManager.default.attributesOfItem(atPath: configURL.path)[.size]) as? Int64) ?? 0
+        return sidecarBytes + max(0, configSizeAfter - configSizeBefore)
+    }
+
+    private func listRepoFiles(repoId: String) async throws -> [String] {
+        let repo = try HubDownloader.parseRepoId(repoId)
+        let entries = try await HubClient.default.listFiles(
+            in: repo, kind: .model, revision: "main", recursive: true)
+        return entries
+            .filter { $0.type == .file }
+            .map(\.path)
+    }
+
+    private func resolveGGUFFile(repoId: String, files: [String]) throws -> String {
+        let isTTY = isatty(STDIN_FILENO) != 0
+
+        switch Self.decideGGUFFile(files: files, pattern: ggufFile, isTTY: isTTY) {
+        case .selected(let file):
+            return file
+        case .ambiguous(let files):
+            FileHandle.standardError.write(
+                Data("Multiple GGUF files match. Rerun with a more specific --gguf-file:\n".utf8))
+            for file in files {
+                FileHandle.standardError.write(Data("  \(file)\n".utf8))
+            }
+            throw ExitCode.failure
+        case .empty:
+            FileHandle.standardError.write(
+                Data("No GGUF files found in \(repoId).\n".utf8))
+            throw ExitCode.failure
+        }
     }
 
     // MARK: - Decision
@@ -190,32 +284,81 @@ struct PullCommand: AsyncParsableCommand {
         return .choose(results)
     }
 
-    // MARK: - Naming + capability
+    static func decideWeightFormat(
+        files: [String],
+        requested: ModelDescriptor.WeightFormat?
+    ) -> ModelDescriptor.WeightFormat {
+        if let requested { return requested }
+        let lowercased = files.map { $0.lowercased() }
+        if lowercased.contains(where: { $0.hasSuffix(".safetensors") }) {
+            return .mlx
+        }
+        if lowercased.contains(where: { $0.hasSuffix(".gguf") }) {
+            return .gguf
+        }
+        return .mlx
+    }
+
+    static func decideGGUFFile(
+        files: [String],
+        pattern: String?,
+        isTTY: Bool
+    ) -> GGUFFileDecision {
+        let ggufs = files
+            .filter { $0.lowercased().hasSuffix(".gguf") }
+            .sorted()
+        guard !ggufs.isEmpty else { return .empty }
+
+        guard let pattern, !pattern.isEmpty else {
+            return .selected(preferredGGUFFile(in: ggufs))
+        }
+
+        let matches: [String]
+        let folded = pattern.lowercased()
+        matches = ggufs.filter {
+            let candidate = $0.lowercased()
+            return candidate == folded || candidate.contains(folded)
+        }
+
+        guard !matches.isEmpty else { return .empty }
+        if matches.count == 1 {
+            return .selected(matches[0])
+        }
+        return .ambiguous(matches)
+    }
+
+    private static func preferredGGUFFile(in files: [String]) -> String {
+        let quantPreference = [
+            "q4_k_m",
+            "q4_k_s",
+            "q4_k",
+            "q4_0",
+            "q5_k_m",
+            "q5_k_s",
+            "q5_k",
+            "q6_k",
+            "q8_0",
+            "q3_k_m",
+            "q3_k_s",
+            "q3_k",
+            "q2_k",
+        ]
+        for quant in quantPreference {
+            if let match = files.first(where: { $0.lowercased().contains(quant) }) {
+                return match
+            }
+        }
+        return files[0]
+    }
+
+    // MARK: - Naming
 
     private static func defaultAlias(forRepo repoId: String) -> String {
         let base = repoId.split(separator: "/").last.map(String.init) ?? repoId
         return base.lowercased()
     }
 
-    /// VLM detection: a `preprocessor_config.json` (image processor) alongside
-    /// the weights is the standard marker. Text-only LLM repos don't ship one.
-    private static func detectCapability(at directory: URL) -> ModelDescriptor.Capability {
-        let preprocessor = directory.appendingPathComponent("preprocessor_config.json")
-        return FileManager.default.fileExists(atPath: preprocessor.path) ? .vision : .text
-    }
-
     // MARK: - Formatting
-
-    static func formatBytes(_ bytes: Int64) -> String {
-        let units = ["B", "KB", "MB", "GB", "TB"]
-        var value = Double(bytes)
-        var unit = 0
-        while value >= 1024 && unit < units.count - 1 {
-            value /= 1024
-            unit += 1
-        }
-        return String(format: "%.2f %@", value, units[unit])
-    }
 
     /// Compact download count for the picker (`1.2M`, `12k`, `123`).
     static func formatDownloads(_ n: Int) -> String {
@@ -230,27 +373,6 @@ struct PullCommand: AsyncParsableCommand {
             return String(format: "%.1fk", Double(n) / 1000)
         }
         return "\(n)"
-    }
-
-    /// Picker-friendly byte size: `1.2 GB`, `412 MB`, `9 KB`. Single
-    /// fractional digit only when the leading value is < 10; otherwise
-    /// integer.
-    static func formatBytesShort(_ bytes: Int64) -> String {
-        let units: [(suffix: String, divisor: Double)] = [
-            ("TB", 1024 * 1024 * 1024 * 1024),
-            ("GB", 1024 * 1024 * 1024),
-            ("MB", 1024 * 1024),
-            ("KB", 1024),
-        ]
-        let v = Double(bytes)
-        for (suffix, div) in units where v >= div {
-            let scaled = v / div
-            if scaled >= 10 {
-                return "\(Int(scaled.rounded())) \(suffix)"
-            }
-            return String(format: "%.1f %@", scaled, suffix)
-        }
-        return "\(bytes) B"
     }
 
     /// Human relative-time string: `"3 days ago"`, `"yesterday"`,
@@ -275,7 +397,7 @@ struct PullCommand: AsyncParsableCommand {
     ) -> String {
         var parts: [String] = []
         if let bytes = sizeBytes {
-            parts.append(formatBytesShort(bytes))
+            parts.append(Bytes.formatShort(bytes))
         }
         if let dl = model.downloads {
             parts.append("\(formatDownloads(dl)) downloads")

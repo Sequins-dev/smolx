@@ -3,13 +3,12 @@ import Testing
 
 @testable import smolx
 
-@Suite("ProgressTracker")
+@Suite("DownloadProgress")
 struct ProgressTrackerTests {
 
     @Test func registrationSeedsResumedBytes() async {
-        let t = ProgressTracker()
-        await t.register(index: 0, path: "model.safetensors", total: 1_000_000, resumedFrom: 200_000)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1)
+        await t.register(index: 0, name: "model.safetensors", totalBytes: 1_000_000, resumedFrom: 200_000)
         let snap = await t.snapshot()
         #expect(snap.totalBytes == 1_000_000)
         #expect(snap.completedBytes == 200_000)
@@ -24,10 +23,9 @@ struct ProgressTrackerTests {
     }
 
     @Test func updateAdvancesPerFileAndOverallBytes() async {
-        let t = ProgressTracker()
-        await t.register(index: 0, path: "a", total: 1_000, resumedFrom: 0)
-        await t.register(index: 1, path: "b", total: 500, resumedFrom: 0)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1)
+        await t.register(index: 0, name: "a", totalBytes: 1_000, resumedFrom: 0)
+        await t.register(index: 1, name: "b", totalBytes: 500, resumedFrom: 0)
 
         await t.update(index: 0, bytes: 250)
         await t.update(index: 1, bytes: 100)
@@ -38,22 +36,20 @@ struct ProgressTrackerTests {
     }
 
     @Test func completedAndCachedTerminalStates() async {
-        let t = ProgressTracker()
-        await t.register(index: 0, path: "a", total: 100, resumedFrom: 0)
-        await t.register(index: 1, path: "b", total: 200, resumedFrom: 0)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1)
+        await t.register(index: 0, name: "a", totalBytes: 100, resumedFrom: 0)
+        await t.register(index: 1, name: "b", totalBytes: 200, resumedFrom: 0)
 
         await t.cached(index: 0, bytes: 100)
-        await t.completed(index: 1, finalBytes: 200)
+        await t.completed(index: 1)
         let snap = await t.snapshot()
         #expect(snap.allFinished == true)
         #expect(snap.completedBytes == 300)
     }
 
     @Test func retryingStatePreservesBytes() async {
-        let t = ProgressTracker()
-        await t.register(index: 0, path: "a", total: 1_000, resumedFrom: 0)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1)
+        await t.register(index: 0, name: "a", totalBytes: 1_000, resumedFrom: 0)
 
         await t.update(index: 0, bytes: 400)
         await t.retrying(index: 0, attempt: 2, delay: 1.0)
@@ -68,9 +64,8 @@ struct ProgressTrackerTests {
 
     @Test func mbpsReflectsRecentTransferOnly() async throws {
         // 100ms window so the test runs fast.
-        let t = ProgressTracker(windowSeconds: 0.1)
-        await t.register(index: 0, path: "a", total: 10_000_000, resumedFrom: 0)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1, windowSeconds: 0.1)
+        await t.register(index: 0, name: "a", totalBytes: 10_000_000, resumedFrom: 0)
 
         await t.update(index: 0, bytes: 1_048_576)
         try await Task.sleep(nanoseconds: 50_000_000)
@@ -82,13 +77,12 @@ struct ProgressTrackerTests {
     }
 
     @Test func failedFileDoesNotBreakSnapshot() async {
-        let t = ProgressTracker()
-        await t.register(index: 0, path: "a", total: 100, resumedFrom: 0)
-        await t.register(index: 1, path: "b", total: 100, resumedFrom: 0)
-        await t.start()
+        let t = DownloadProgress(repoId: "test/repo", slots: 1)
+        await t.register(index: 0, name: "a", totalBytes: 100, resumedFrom: 0)
+        await t.register(index: 1, name: "b", totalBytes: 100, resumedFrom: 0)
 
         await t.failed(index: 0, reason: "disk full")
-        await t.completed(index: 1, finalBytes: 100)
+        await t.completed(index: 1)
         let snap = await t.snapshot()
         #expect(snap.allFinished == true)  // failed counts as terminal
         if case .failed(let reason) = snap.files[0].state {

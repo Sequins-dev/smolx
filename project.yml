@@ -52,11 +52,11 @@ packages:
     url: https://github.com/hummingbird-project/hummingbird.git
     from: "2.23.0"
   MLX:
-    url: https://github.com/ml-explore/mlx-swift.git
-    minorVersion: "0.31.3"
+    url: https://github.com/Sequins-dev/mlx-swift.git
+    branch: smolx-gguf-q4k
   MLXSwiftLM:
-    url: https://github.com/ml-explore/mlx-swift-lm.git
-    majorVersion: "3.31.3"
+    url: https://github.com/Sequins-dev/mlx-swift-lm.git
+    branch: smolx-gguf-loader
   SwiftHuggingFace:
     url: https://github.com/huggingface/swift-huggingface.git
     from: "0.9.0"

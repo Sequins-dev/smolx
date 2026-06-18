@@ -1,33 +1,6 @@
 import Foundation
 import Logging
 
-/// Builds new provider instances on demand. Keeps `ModelManager` agnostic to
-/// the concrete provider type, which makes the manager unit-testable with a
-/// stub provider and lets us add new backends without touching the manager.
-protocol ProviderFactory: Sendable {
-    func make(_ descriptor: ModelDescriptor) async throws -> any ModelProvider
-}
-
-/// Source of "currently available system memory" readings. Pulled into a
-/// protocol so tests can stub the value rather than depending on whatever
-/// the host happens to have free at test time.
-protocol MemoryStats: Sendable {
-    var availableBytes: Int64 { get }
-}
-
-struct SystemMemoryStats: MemoryStats {
-    var availableBytes: Int64 { SystemMemory.availableBytes }
-}
-
-/// Handle returned by `ModelManager.acquire`. Holds the loaded provider and a
-/// one-shot `release` closure the caller must invoke when done. Release
-/// decrements the entry's ref count; when the count hits zero the manager
-/// schedules a per-entry idle-unload task that fires after `idleTimeout`.
-struct ModelLease: Sendable {
-    let provider: any ModelProvider
-    let release: @Sendable () async -> Void
-}
-
 /// Owns the set of currently-loaded providers and enforces a memory budget +
 /// idle-eviction policy. Connection liveness is tracked via per-entry ref
 /// counting: every `acquire` increments the count, every `release` decrements
@@ -56,22 +29,10 @@ actor ModelManager {
             maxConcurrent: nil)
     }
 
-    /// Manager-owned bookkeeping per loaded model. `activeRequests` is the ref
-    /// count; `lastReleasedAt` is set whenever the count drops to zero (the
-    /// moment the idle clock starts). `idleUnloadTask` is the per-entry
-    /// scheduled unload, cancelled whenever the count goes back above zero.
-    private struct Entry {
-        var provider: any ModelProvider
-        var sizeHint: Int64
-        var lastReleasedAt: Date
-        var activeRequests: Int
-        var idleUnloadTask: Task<Void, Never>?
-    }
-
     private let registry: ModelRegistry
     private let factory: any ProviderFactory
     private let logger: Logger
-    private var loaded: [String: Entry] = [:]
+    private var loaded: [String: LoadedModelEntry] = [:]
     /// In-flight model loads, keyed by model name. When a second `acquire`
     /// arrives for a name that's currently loading, we await this task
     /// instead of kicking off a parallel `factory.make(...)` — model loads
@@ -201,7 +162,7 @@ actor ModelManager {
         // updates it to observed `MLX.Memory.activeMemory` delta, which is
         // closer to truth than the on-disk quantized weight size.
         let actualBytes = await provider.residentBytes
-        loaded[name] = Entry(
+        loaded[name] = LoadedModelEntry(
             provider: provider,
             sizeHint: actualBytes,
             lastReleasedAt: Date(),
@@ -225,11 +186,9 @@ actor ModelManager {
 
     private func bumpRefCount(_ name: String) {
         guard var entry = loaded[name] else { return }
-        entry.idleUnloadTask?.cancel()
-        entry.idleUnloadTask = nil
-        entry.activeRequests += 1
+        let active = entry.acquire()
         loaded[name] = entry
-        logger.debug("Acquired \(name) — active=\(entry.activeRequests)")
+        logger.debug("Acquired \(name) — active=\(active)")
     }
 
     private func makeLease(name: String, provider: any ModelProvider) -> ModelLease {
@@ -240,22 +199,12 @@ actor ModelManager {
 
     private func releaseLease(name: String) {
         guard var entry = loaded[name] else { return }
-        assert(entry.activeRequests > 0, "release without matching acquire for \(name)")
-        entry.activeRequests = max(0, entry.activeRequests - 1)
-        logger.debug("Released \(name) — active=\(entry.activeRequests)")
-        if entry.activeRequests == 0 {
-            // `lastReleasedAt` updates whether or not the idle timer is
-            // enabled — `lruKey()` reads it to pick eviction victims under
-            // memory pressure even in lazy mode. Only the timer is gated.
-            entry.lastReleasedAt = Date()
-            entry.idleUnloadTask?.cancel()
-            if let timeout = settings.idleTimeout {
-                entry.idleUnloadTask = scheduleIdleUnload(name: name, timeout: timeout)
-            } else {
-                entry.idleUnloadTask = nil
-            }
+        let idleUnload = settings.idleTimeout.map { timeout in
+            { self.scheduleIdleUnload(name: name, timeout: timeout) }
         }
+        let active = entry.release(scheduleIdleUnload: idleUnload)
         loaded[name] = entry
+        logger.debug("Released \(name) — active=\(active)")
     }
 
     private func scheduleIdleUnload(name: String, timeout: TimeInterval) -> Task<Void, Never> {
@@ -311,24 +260,7 @@ actor ModelManager {
     /// Pick the LRU eviction candidate, preferring entries with no active
     /// requests so we don't interrupt streams unless we have no other choice.
     private func lruKey() -> String? {
-        var idleKey: String?
-        var idleOldest: Date = .distantFuture
-        var activeKey: String?
-        var activeOldest: Date = .distantFuture
-        for (name, entry) in loaded {
-            if entry.activeRequests == 0 {
-                if entry.lastReleasedAt < idleOldest {
-                    idleOldest = entry.lastReleasedAt
-                    idleKey = name
-                }
-            } else {
-                if entry.lastReleasedAt < activeOldest {
-                    activeOldest = entry.lastReleasedAt
-                    activeKey = name
-                }
-            }
-        }
-        return idleKey ?? activeKey
+        LoadedModelEntry.lruKey(in: loaded)
     }
 
     private func handlePressure(_ level: MemoryMonitor.Level) async {

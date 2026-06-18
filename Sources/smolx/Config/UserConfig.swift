@@ -1,11 +1,8 @@
 import Foundation
 
-/// Persisted user preferences stored at `~/.smolx/config.json`. Today it
-/// only carries the model-tier defaults; future additions land here too.
-///
-/// Each tier is optional. The cascade resolution in `ModelTuple.resolve`
-/// fills missing tiers from larger configured ones, so a user who only
-/// sets `smart` gets the "one model for everything" behavior automatically.
+/// Persisted user preferences stored at `~/.smolx/config.json`.
+/// Each tier is optional; `resolve(...)` returns a fully-filled copy where
+/// all three tiers are guaranteed non-nil.
 struct UserConfig: Codable, Sendable, Equatable {
     var smart: String?
     var fast: String?
@@ -21,11 +18,52 @@ struct UserConfig: Codable, Sendable, Equatable {
     /// file rather than leave an empty JSON object behind.
     var isEmpty: Bool { smart == nil && fast == nil && small == nil }
 
+    // MARK: - Resolution
+
+    /// Resolve CLI overrides and installed-model fallback on top of this
+    /// config and return a fully-filled copy (all tiers non-nil).
+    ///
+    /// Resolution order (highest precedence first):
+    ///   1. Persisted config (self.smart / .fast / .small).
+    ///   2. `modelSugar` (i.e. `--model X`) replaces all tiers for this invocation.
+    ///   3. Per-tier CLI overrides replace the value for that tier.
+    ///   4. Cascade downward: nil `fast` inherits `smart`; nil `small` inherits `fast`.
+    ///   5. Last resort: `firstInstalled` fills `smart` and re-cascades.
+    ///
+    /// Returns `nil` only when `smart` cannot be filled by any source.
+    func resolve(
+        smartOverride: String? = nil,
+        fastOverride: String? = nil,
+        smallOverride: String? = nil,
+        modelSugar: String? = nil,
+        firstInstalled: String? = nil
+    ) -> UserConfig? {
+        var s = smart
+        var f = fast
+        var t = small
+        if let modelSugar {
+            s = modelSugar
+            f = modelSugar
+            t = modelSugar
+        }
+        if let smartOverride { s = smartOverride }
+        if let fastOverride { f = fastOverride }
+        if let smallOverride { t = smallOverride }
+        if f == nil { f = s }
+        if t == nil { t = f }
+        if s == nil, let firstInstalled {
+            s = firstInstalled
+            if f == nil { f = firstInstalled }
+            if t == nil { t = firstInstalled }
+        }
+        guard s != nil, f != nil, t != nil else { return nil }
+        return UserConfig(smart: s, fast: f, small: t)
+    }
+
     // MARK: - I/O
 
-    /// Read the persisted config. A missing file is not an error — it
-    /// just means the user hasn't configured anything yet; we return an
-    /// empty config.
+    /// Read the persisted config. A missing file is not an error — returns
+    /// an empty config.
     static func load(from url: URL = Paths.configFile) throws -> UserConfig {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return UserConfig()
@@ -34,9 +72,8 @@ struct UserConfig: Codable, Sendable, Equatable {
         return try JSONDecoder().decode(UserConfig.self, from: data)
     }
 
-    /// Write atomically. When the config is empty, remove the file
-    /// instead of writing `{}` — keeps `~/.smolx/` tidy and makes it
-    /// trivial to spot whether the user has ever configured anything.
+    /// Write atomically. When the config is empty, remove the file instead
+    /// of writing `{}`.
     func save(to url: URL = Paths.configFile) throws {
         if isEmpty {
             if FileManager.default.fileExists(atPath: url.path) {

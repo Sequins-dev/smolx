@@ -38,7 +38,7 @@ struct ModelsCommand: AsyncParsableCommand {
                 Self.row(
                     name: m.name,
                     type: m.capability.rawValue,
-                    size: PullCommand.formatBytes(m.diskSizeBytes),
+                    size: Bytes.format(m.diskSizeBytes),
                     repo: m.repoId))
         }
     }

@@ -58,6 +58,91 @@ struct PullCommandTests {
         }
     }
 
+    // MARK: - GGUF file decision
+
+    @Test func weightFormatArgumentParsingIsCaseInsensitive() {
+        #expect(ModelDescriptor.WeightFormat(argument: "mlx") == .mlx)
+        #expect(ModelDescriptor.WeightFormat(argument: "GGUF") == .gguf)
+        #expect(ModelDescriptor.WeightFormat(argument: "unknown") == nil)
+    }
+
+    @Test func formatDecisionInfersGGUFWhenRepoOnlyHasGGUFWeights() {
+        let d = PullCommand.decideWeightFormat(
+            files: ["README.md", "model.Q4_K_M.gguf"],
+            requested: nil)
+        #expect(d == .gguf)
+    }
+
+    @Test func formatDecisionDefaultsToMLXWhenSafetensorsArePresent() {
+        let d = PullCommand.decideWeightFormat(
+            files: ["model.safetensors", "model.Q4_K_M.gguf"],
+            requested: nil)
+        #expect(d == .mlx)
+    }
+
+    @Test func formatDecisionHonorsExplicitFormat() {
+        let d = PullCommand.decideWeightFormat(
+            files: ["model.safetensors"],
+            requested: .gguf)
+        #expect(d == .gguf)
+    }
+
+    @Test func ggufDecisionSelectsOnlyFileAutomatically() {
+        let d = PullCommand.decideGGUFFile(
+            files: ["model.Q4_K_M.gguf"],
+            pattern: nil,
+            isTTY: false)
+        #expect(d == .selected("model.Q4_K_M.gguf"))
+    }
+
+    @Test func ggufDecisionPrefersQ4KMWhenMultipleFilesExist() {
+        let d = PullCommand.decideGGUFFile(
+            files: [
+                "model-Q2_K.gguf",
+                "model-Q3_K_M.gguf",
+                "model-Q4_K_M.gguf",
+                "model-Q6_K.gguf",
+                "model-Q8_0.gguf",
+            ],
+            pattern: nil,
+            isTTY: false)
+        #expect(d == .selected("model-Q4_K_M.gguf"))
+    }
+
+    @Test func ggufDecisionUsesExactPatternMatch() {
+        let d = PullCommand.decideGGUFFile(
+            files: ["model.Q4_K_M.gguf", "model.Q5_K_M.gguf"],
+            pattern: "model.Q4_K_M.gguf",
+            isTTY: false)
+        #expect(d == .selected("model.Q4_K_M.gguf"))
+    }
+
+    @Test func ggufDecisionUsesSubstringPatternMatch() {
+        let d = PullCommand.decideGGUFFile(
+            files: ["model.Q4_K_M.gguf", "model.Q5_K_M.gguf"],
+            pattern: "Q5_K_M",
+            isTTY: false)
+        #expect(d == .selected("model.Q5_K_M.gguf"))
+    }
+
+    @Test func ggufDecisionRequiresSpecificPatternWhenMultipleNonTTYFilesMatch() {
+        let files = ["model.Q4_K_M.gguf", "model.Q4_K_S.gguf"]
+        let d = PullCommand.decideGGUFFile(
+            files: files,
+            pattern: "Q4_K",
+            isTTY: false)
+        #expect(d == .ambiguous(files))
+    }
+
+    @Test func ggufDecisionSelectsDefaultEvenWhenTTYHasMultipleFiles() {
+        let files = ["model.Q4_K_M.gguf", "model.Q5_K_M.gguf"]
+        let d = PullCommand.decideGGUFFile(
+            files: files,
+            pattern: nil,
+            isTTY: true)
+        #expect(d == .selected("model.Q4_K_M.gguf"))
+    }
+
     // MARK: - formatDownloads
 
     @Test func downloadsBelowAThousandShowAsRawInteger() {
@@ -82,17 +167,17 @@ struct PullCommandTests {
         #expect(PullCommand.formatDownloads(12_500_000) == "12.5M")
     }
 
-    // MARK: - formatBytesShort
+    // MARK: - Bytes.formatShort
 
     @Test func bytesShortPicksCorrectUnit() {
-        #expect(PullCommand.formatBytesShort(0) == "0 B")
-        #expect(PullCommand.formatBytesShort(512) == "512 B")
-        #expect(PullCommand.formatBytesShort(1024) == "1.0 KB")
-        #expect(PullCommand.formatBytesShort(15 * 1024) == "15 KB")
-        #expect(PullCommand.formatBytesShort(1024 * 1024) == "1.0 MB")
-        #expect(PullCommand.formatBytesShort(412 * 1024 * 1024) == "412 MB")
-        #expect(PullCommand.formatBytesShort(Int64(1.5 * 1024 * 1024 * 1024)) == "1.5 GB")
-        #expect(PullCommand.formatBytesShort(16 * 1024 * 1024 * 1024) == "16 GB")
+        #expect(Bytes.formatShort(0) == "0 B")
+        #expect(Bytes.formatShort(512) == "512 B")
+        #expect(Bytes.formatShort(1024) == "1.0 KB")
+        #expect(Bytes.formatShort(15 * 1024) == "15 KB")
+        #expect(Bytes.formatShort(1024 * 1024) == "1.0 MB")
+        #expect(Bytes.formatShort(412 * 1024 * 1024) == "412 MB")
+        #expect(Bytes.formatShort(Int64(1.5 * 1024 * 1024 * 1024)) == "1.5 GB")
+        #expect(Bytes.formatShort(16 * 1024 * 1024 * 1024) == "16 GB")
     }
 
     // MARK: - formatRelative

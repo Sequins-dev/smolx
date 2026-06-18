@@ -235,7 +235,7 @@ enum OpenAIRoutes {
     // MARK: - Model info helpers
 
     private static func modelInfo(for descriptor: ModelDescriptor) -> OpenAI.ModelInfo {
-        let ctx = descriptor.contextLength
+        let ctx = ModelSnapshotInspector.contextLength(for: descriptor)
         return OpenAI.ModelInfo(
             id: descriptor.name,
             created: Int(descriptor.addedAt.timeIntervalSince1970),

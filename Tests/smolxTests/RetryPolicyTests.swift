@@ -29,7 +29,7 @@ struct RetryPolicyTests {
     @Test func succeedsOnFirstAttempt() async throws {
         let log = AttemptLog()
         let result: Int = try await RetryPolicy.default.run(
-            onAttempt: { n, err in Task { await log.record(n, err) } },
+            onAttempt: { n, err in await log.record(n, err) },
             { 42 })
         #expect(result == 42)
         // We don't assert on the log because it's async-recorded — but if

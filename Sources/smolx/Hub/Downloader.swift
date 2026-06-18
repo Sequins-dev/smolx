@@ -2,6 +2,13 @@ import Foundation
 import HuggingFace
 import Logging
 
+/// Result returned by `HubDownloader.download` so callers can read the total
+/// byte count without a second filesystem walk.
+struct DownloadResult: Sendable {
+    var snapshotURL: URL
+    var totalBytes: Int64
+}
+
 /// Downloads model snapshots from the HuggingFace Hub into our own flat cache
 /// directory at `~/.smolx/models/<namespace>--<name>/<filename>`.
 ///
@@ -13,39 +20,18 @@ struct HubDownloader: Sendable {
 
     enum DownloadError: Error, CustomStringConvertible {
         case invalidRepoId(String)
-        case noWeights(repo: String)
+        case noWeights(repo: String, format: ModelDescriptor.WeightFormat)
         case underlying(Error)
 
         var description: String {
             switch self {
             case .invalidRepoId(let r):
                 return "Invalid repo id '\(r)'. Expected '<namespace>/<name>'."
-            case .noWeights(let r):
-                return "No model weights found in '\(r)' (no .safetensors files)."
+            case .noWeights(let r, let format):
+                return "No \(format.rawValue.uppercased()) model weights found in '\(r)'."
             case .underlying(let e):
                 return "Download failed: \(e)"
             }
-        }
-    }
-
-    enum Layout {
-        /// Total size in bytes across all wanted files in a snapshot directory.
-        static func diskSize(of directory: URL) -> Int64 {
-            let fm = FileManager.default
-            guard let enumerator = fm.enumerator(atPath: directory.path)
-            else { return 0 }
-            var total: Int64 = 0
-            for case let relPath as String in enumerator {
-                let fullPath = directory.appendingPathComponent(relPath).path
-                guard let attrs = try? fm.attributesOfItem(atPath: fullPath) else { continue }
-                guard (attrs[.type] as? FileAttributeType) == .typeRegular else { continue }
-                if let size = attrs[.size] as? Int64 {
-                    total += size
-                } else if let size = attrs[.size] as? Int {
-                    total += Int64(size)
-                }
-            }
-            return total
         }
     }
 
@@ -67,16 +53,17 @@ struct HubDownloader: Sendable {
     }
 
     /// Downloads the model snapshot in parallel and returns the local snapshot
-    /// directory. Per-file progress is pushed into `tracker`; the caller is
-    /// expected to wire a `ProgressRenderer` to read from the same tracker for
-    /// display.
+    /// directory plus the total byte count from the manifest. Per-file progress
+    /// is pushed into `progress`; the caller wires the renderer separately.
     func download(
         repoId: String,
         revision: String = "main",
+        format: ModelDescriptor.WeightFormat = .mlx,
+        weightFile: String? = nil,
         parallelism: Int = 4,
         retry: RetryPolicy = .default,
-        tracker: ProgressTracker
-    ) async throws -> URL {
+        progress: any DownloadProgressSink
+    ) async throws -> DownloadResult {
         let repo = try Self.parseRepoId(repoId)
         logger.debug("Listing files in \(repoId)")
 
@@ -88,9 +75,15 @@ struct HubDownloader: Sendable {
             throw DownloadError.underlying(error)
         }
 
-        let wantedFiles = filterWantedFiles(entries)
-        guard wantedFiles.contains(where: { $0.path.hasSuffix(".safetensors") }) else {
-            throw DownloadError.noWeights(repo: repoId)
+        let wantedFiles = filterWantedFiles(entries, format: format, weightFile: weightFile)
+        let hasExpectedWeights = switch format {
+        case .mlx:
+            wantedFiles.contains { $0.path.hasSuffix(".safetensors") }
+        case .gguf:
+            wantedFiles.contains { $0.path.lowercased().hasSuffix(".gguf") }
+        }
+        guard hasExpectedWeights else {
+            throw DownloadError.noWeights(repo: repoId, format: format)
         }
 
         let modelDir = Paths.modelDirectory(namespace: repo.namespace, name: repo.name)
@@ -107,21 +100,82 @@ struct HubDownloader: Sendable {
             let resumedFrom =
                 (try? FileManager.default
                     .attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
-            await tracker.register(
-                index: index, path: entry.path,
-                total: total, resumedFrom: min(resumedFrom, total))
+            await progress.register(
+                index: index, name: entry.path,
+                totalBytes: total, resumedFrom: min(resumedFrom, total))
         }
-        await tracker.start()
+        await progress.start()
 
         logger.debug("Downloading \(wantedFiles.count) files from \(repoId) (parallel=\(parallelism))")
 
         try await runPool(
             wantedFiles: wantedFiles, repo: repo, revision: revision,
             modelDir: modelDir, parallelism: parallelism, retry: retry,
-            streamer: streamer, base: huggingFaceBase, tracker: tracker)
+            streamer: streamer, base: huggingFaceBase, progress: progress)
 
         logger.debug("Snapshot ready at \(modelDir.path)")
-        return modelDir
+        let totalBytes = wantedFiles.reduce(into: Int64(0)) { $0 += Int64($1.size ?? 0) }
+        return DownloadResult(snapshotURL: modelDir, totalBytes: totalBytes)
+    }
+
+    func downloadSidecars(
+        repoId: String,
+        revision: String = "main",
+        paths: [String],
+        into modelDir: URL,
+        retry: RetryPolicy = .default
+    ) async throws -> Int64 {
+        guard !paths.isEmpty else { return 0 }
+        let repo = try Self.parseRepoId(repoId)
+
+        let entries: [Git.TreeEntry]
+        do {
+            entries = try await client.listFiles(
+                in: repo, kind: .model, revision: revision, recursive: true)
+        } catch {
+            throw DownloadError.underlying(error)
+        }
+
+        let wanted = Set(paths)
+        let sidecars = entries
+            .filter { $0.type == .file && wanted.contains($0.path) }
+            .sorted { $0.path < $1.path }
+
+        var totalBytes: Int64 = 0
+        for entry in sidecars {
+            let destination = modelDir.appendingPathComponent(entry.path)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                let size =
+                    ((try? FileManager.default
+                        .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
+                    ?? Int64(entry.size ?? 0)
+                totalBytes += size
+                continue
+            }
+
+            let url =
+                huggingFaceBase
+                .appendingPathComponent(repo.namespace)
+                .appendingPathComponent(repo.name)
+                .appendingPathComponent("resolve")
+                .appendingPathComponent(revision)
+                .appendingPathComponent(entry.path)
+
+            do {
+                try await retry.run {
+                    try await streamer.download(
+                        url: url,
+                        destination: destination,
+                        onBytes: { _ in })
+                }
+                totalBytes += Int64(entry.size ?? 0)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw DownloadError.underlying(error)
+            }
+        }
+        return totalBytes
     }
 
     // MARK: - Pool
@@ -135,7 +189,7 @@ struct HubDownloader: Sendable {
         retry: RetryPolicy,
         streamer: StreamingDownloader,
         base: URL,
-        tracker: ProgressTracker
+        progress: any DownloadProgressSink
     ) async throws {
         let pool = max(1, min(parallelism, wantedFiles.count))
 
@@ -149,7 +203,7 @@ struct HubDownloader: Sendable {
                         entry: entry, index: index,
                         repo: repo, revision: revision,
                         modelDir: modelDir, retry: retry,
-                        streamer: streamer, base: base, tracker: tracker)
+                        streamer: streamer, base: base, progress: progress)
                 }
                 nextIndex += 1
             }
@@ -162,7 +216,7 @@ struct HubDownloader: Sendable {
                             entry: entry, index: index,
                             repo: repo, revision: revision,
                             modelDir: modelDir, retry: retry,
-                            streamer: streamer, base: base, tracker: tracker)
+                            streamer: streamer, base: base, progress: progress)
                     }
                     nextIndex += 1
                 }
@@ -170,9 +224,6 @@ struct HubDownloader: Sendable {
         }
     }
 
-    /// Downloads a single file with retry. The progress observer reads
-    /// `progress.completedUnitCount` (which the StreamingDownloader's session
-    /// delegate updates on every chunk) at 250 ms cadence.
     private static func downloadOne(
         entry: Git.TreeEntry,
         index: Int,
@@ -182,7 +233,7 @@ struct HubDownloader: Sendable {
         retry: RetryPolicy,
         streamer: StreamingDownloader,
         base: URL,
-        tracker: ProgressTracker
+        progress: any DownloadProgressSink
     ) async throws {
         let destination = modelDir.appendingPathComponent(entry.path)
 
@@ -193,7 +244,7 @@ struct HubDownloader: Sendable {
                 ((try? FileManager.default
                     .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
                 ?? Int64(entry.size ?? 0)
-            await tracker.cached(index: index, bytes: size)
+            await progress.cached(index: index, bytes: size)
             return
         }
 
@@ -209,48 +260,30 @@ struct HubDownloader: Sendable {
             try await retry.run(
                 onAttempt: { attempt, _ in
                     if attempt > 1 {
-                        Task {
-                            await tracker.retrying(
-                                index: index, attempt: attempt, delay: 0)
-                        }
+                        await progress.retrying(index: index, attempt: attempt, delay: 0)
                     }
                 }
             ) {
-                await tracker.preparing(index: index)
-                let totalBytes = Int64(entry.size ?? 0)
-                let progress = Foundation.Progress(totalUnitCount: totalBytes)
-                let pollerTask = Task {
-                    var lastBytes: Int64 = -1
-                    while !Task.isCancelled {
-                        let current = progress.completedUnitCount
-                        if current != lastBytes {
-                            lastBytes = current
-                            await tracker.update(index: index, bytes: current)
-                        }
-                        try? await Task.sleep(nanoseconds: 250_000_000)
-                    }
-                }
-                defer { pollerTask.cancel() }
-
+                await progress.preparing(index: index)
                 try await streamer.download(
-                    url: url, destination: destination, progress: progress)
+                    url: url,
+                    destination: destination,
+                    onBytes: { absoluteBytes in
+                        Task { await progress.update(index: index, bytes: absoluteBytes) }
+                    })
             }
-            let finalBytes =
-                ((try? FileManager.default
-                    .attributesOfItem(atPath: destination.path)[.size]) as? Int64)
-                ?? Int64(entry.size ?? 0)
-            await tracker.completed(index: index, finalBytes: finalBytes)
+            await progress.completed(index: index)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            await tracker.failed(index: index, reason: String(describing: error))
+            await progress.failed(index: index, reason: String(describing: error))
             throw HubDownloader.DownloadError.underlying(error)
         }
     }
 
     // MARK: - Helpers
 
-    private static func parseRepoId(_ s: String) throws -> Repo.ID {
+    static func parseRepoId(_ s: String) throws -> Repo.ID {
         let parts = s.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
             throw DownloadError.invalidRepoId(s)
@@ -262,25 +295,49 @@ struct HubDownloader: Sendable {
     ///   - non-file entries (directories)
     ///   - non-safetensors weight formats when safetensors are present
     ///   - example images, demos, docs we don't need at runtime
-    private func filterWantedFiles(_ entries: [Git.TreeEntry]) -> [Git.TreeEntry] {
-        let files = entries.filter { $0.type == .file }
-        let hasSafetensors = files.contains { $0.path.hasSuffix(".safetensors") }
+    static func filterWantedPaths(
+        _ paths: [String],
+        format: ModelDescriptor.WeightFormat,
+        weightFile: String?
+    ) -> [String] {
+        let hasSafetensors = paths.contains { $0.lowercased().hasSuffix(".safetensors") }
+        let selectedGGUF = weightFile?.lowercased()
 
-        return files.filter { entry in
-            let path = entry.path.lowercased()
-            if path.hasSuffix(".safetensors") { return true }
+        return paths.filter { original in
+            let path = original.lowercased()
+            if path.hasSuffix(".safetensors") {
+                return format == .mlx
+            }
+            if path.hasSuffix(".gguf") {
+                guard format == .gguf else { return false }
+                if let selectedGGUF {
+                    return path == selectedGGUF
+                }
+                return true
+            }
             if path.hasSuffix(".json") { return true }
             if path.hasSuffix(".txt") || path.hasSuffix(".jinja") { return true }
             let base = (path as NSString).lastPathComponent
             if base.hasPrefix("tokenizer") || base.hasPrefix("special_tokens") { return true }
             if base.hasPrefix("vocab") || base.hasPrefix("merges") { return true }
             if path.hasSuffix(".model") { return true }
-            if hasSafetensors,
+            if format == .mlx, hasSafetensors,
                 path.hasSuffix(".bin") || path.hasSuffix(".gguf") || path.hasSuffix(".pt")
             {
                 return false
             }
             return false
         }
+    }
+
+    private func filterWantedFiles(
+        _ entries: [Git.TreeEntry],
+        format: ModelDescriptor.WeightFormat,
+        weightFile: String?
+    ) -> [Git.TreeEntry] {
+        let files = entries.filter { $0.type == .file }
+        let wanted = Set(Self.filterWantedPaths(
+            files.map(\.path), format: format, weightFile: weightFile))
+        return files.filter { wanted.contains($0.path) }
     }
 }

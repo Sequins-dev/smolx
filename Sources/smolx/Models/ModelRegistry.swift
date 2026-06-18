@@ -41,7 +41,7 @@ struct ModelRegistry: Sendable {
     @discardableResult
     func remove(name: String) throws -> ModelDescriptor? {
         var all = try load()
-        guard let idx = all.firstIndex(where: { $0.name == name || $0.repoId == name }) else {
+        guard let idx = all.firstIndex(where: { $0.matches(name) }) else {
             return nil
         }
         let removed = all.remove(at: idx)
@@ -50,7 +50,7 @@ struct ModelRegistry: Sendable {
     }
 
     func find(_ name: String) throws -> ModelDescriptor? {
-        try load().first { $0.name == name || $0.repoId == name }
+        try load().first { $0.matches(name) }
     }
 }
 

@@ -54,8 +54,11 @@ xcode-build: xcode
 		-scheme $(XCODE_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-derivedDataPath $(XCODE_BUILD_DIR) \
+		-destination 'platform=macOS,arch=arm64' \
 		-skipMacroValidation \
 		-skipPackagePluginValidation \
+		ONLY_ACTIVE_ARCH=YES \
+		ARCHS=arm64 \
 		build
 
 xcode-open: xcode

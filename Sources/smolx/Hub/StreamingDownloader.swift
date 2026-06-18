@@ -1,13 +1,9 @@
 import Foundation
 
 /// Direct URLSession downloader that streams bytes into a `<dest>.partial`
-/// file and updates a `Foundation.Progress` as bytes arrive. We do this
-/// ourselves because `URLSession.download(for:delegate:)` on macOS does not
-/// reliably call the task-specific `URLSessionDownloadDelegate.didWriteData`
-/// callback — the Progress object swift-huggingface passes to its delegate
-/// stays at 0 throughout the transfer and only the final completion is
-/// observable. A session-level `URLSessionDataDelegate` IS called for every
-/// chunk, which is what we use here.
+/// file and calls back `onBytes` with the running byte total as each chunk
+/// arrives. We use a session-level `URLSessionDataDelegate` because the
+/// task-level delegate callbacks are unreliable on macOS for `download` tasks.
 ///
 /// Side benefit: because we control the partial file ourselves, **byte-level
 /// resume across crashes works**. A killed process leaves `<dest>.partial`
@@ -39,13 +35,12 @@ final class StreamingDownloader: @unchecked Sendable {
     }
 
     /// Downloads `url` to `destination`, appending to any existing `.partial`.
-    /// `progress.completedUnitCount` is updated continuously; `totalUnitCount`
-    /// is set from the response's Content-Length (resumed downloads include
-    /// the already-on-disk portion in the total).
+    /// `onBytes` is called with the running absolute byte total (resumeFrom +
+    /// all received so far) after each chunk is written to disk.
     func download(
         url: URL,
         destination: URL,
-        progress: Foundation.Progress,
+        onBytes: @escaping @Sendable (Int64) -> Void = { _ in },
         headers: [String: String] = [:]
     ) async throws {
         let partial = destination.appendingPathExtension("partial")
@@ -71,11 +66,6 @@ final class StreamingDownloader: @unchecked Sendable {
         let fileHandle = try FileHandle(forWritingTo: partial)
         try fileHandle.seekToEnd()
 
-        // Initialise progress so the bar opens at the resumed offset.
-        if resumeFrom > 0 {
-            progress.completedUnitCount = resumeFrom
-        }
-
         let response: HTTPURLResponse
         do {
             response = try await withTaskCancellationHandler {
@@ -85,7 +75,7 @@ final class StreamingDownloader: @unchecked Sendable {
                     delegate.register(
                         taskID: task.taskIdentifier,
                         fileHandle: fileHandle,
-                        progress: progress,
+                        onBytes: onBytes,
                         resumeFrom: resumeFrom,
                         continuation: cont)
                     task.resume()
@@ -144,9 +134,9 @@ final class StreamingDownloader: @unchecked Sendable {
 
         private struct Pending {
             let fileHandle: FileHandle
-            let progress: Foundation.Progress
+            let onBytes: @Sendable (Int64) -> Void
             let continuation: CheckedContinuation<HTTPURLResponse, Error>
-            var totalBytes: Int64
+            var totalBytes: Int64  // resumeFrom + received; passed to onBytes as running absolute
             var receivedResponse: HTTPURLResponse?
         }
 
@@ -156,7 +146,7 @@ final class StreamingDownloader: @unchecked Sendable {
         func register(
             taskID: Int,
             fileHandle: FileHandle,
-            progress: Foundation.Progress,
+            onBytes: @escaping @Sendable (Int64) -> Void,
             resumeFrom: Int64,
             continuation: CheckedContinuation<HTTPURLResponse, Error>
         ) {
@@ -164,7 +154,7 @@ final class StreamingDownloader: @unchecked Sendable {
             defer { lock.unlock() }
             pending[taskID] = Pending(
                 fileHandle: fileHandle,
-                progress: progress,
+                onBytes: onBytes,
                 continuation: continuation,
                 totalBytes: resumeFrom,
                 receivedResponse: nil)
@@ -192,10 +182,6 @@ final class StreamingDownloader: @unchecked Sendable {
                 let http = response as? HTTPURLResponse
             {
                 p.receivedResponse = http
-                let contentLength = http.expectedContentLength
-                if contentLength > 0 {
-                    p.progress.totalUnitCount = p.totalBytes + contentLength
-                }
                 pending[dataTask.taskIdentifier] = p
             }
             lock.unlock()
@@ -215,9 +201,10 @@ final class StreamingDownloader: @unchecked Sendable {
             do {
                 try p.fileHandle.write(contentsOf: data)
                 p.totalBytes += Int64(data.count)
-                p.progress.completedUnitCount = p.totalBytes
+                let absolute = p.totalBytes
                 pending[dataTask.taskIdentifier] = p
                 lock.unlock()
+                p.onBytes(absolute)
             } catch {
                 lock.unlock()
                 dataTask.cancel()

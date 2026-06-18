@@ -114,16 +114,10 @@ enum InteractivePicker {
         return min(max(0, newTop), maxTop)
     }
 
-    /// Best-effort terminal column count via `ioctl(TIOCGWINSZ)`. Falls
-    /// back to 80 when stdout isn't a TTY or the syscall fails. Called
-    /// once per render so window resizes are picked up naturally on the
-    /// next frame — no SIGWINCH plumbing needed.
+    /// Best-effort terminal column count. Called once per render so window
+    /// resizes are picked up naturally on the next frame.
     static func terminalCols() -> Int {
-        var ws = winsize()
-        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0, ws.ws_col > 0 {
-            return Int(ws.ws_col)
-        }
-        return 80
+        Terminal.columns(default: 80)
     }
 
     // MARK: - Public entry
@@ -164,12 +158,12 @@ enum InteractivePicker {
         defer {
             var saved = savedAttrs
             _ = tcsetattr(STDIN_FILENO, TCSANOW, &saved)
-            writeStderr("\u{001B}[?25h")  // show cursor
+            Terminal.writeStderr(Terminal.showCursor)
             _ = signal(SIGINT, prevSigint)
             PickerCleanup.savedAttrs = nil
         }
 
-        writeStderr("\u{001B}[?25l")  // hide cursor for the duration
+        Terminal.writeStderr(Terminal.hideCursor)
 
         var rows = initialRows
         var selected = 0
@@ -316,7 +310,7 @@ enum InteractivePicker {
 
             // 8) Render.
             if !firstDraw {
-                writeStderr("\u{001B}[\(frameHeight)F\u{001B}[J")
+                Terminal.writeStderr(Terminal.moveUpAndClear(frameHeight))
             }
             firstDraw = false
             renderFrame(
@@ -345,7 +339,7 @@ enum InteractivePicker {
         exhausted: Bool,
         cols: Int
     ) {
-        writeStderr("\(title)\n")
+        Terminal.writeStderr("\(title)\n")
 
         // Primary column width — leave room for a 2-char marker prefix
         // ("▸ " or "  ") plus a small right-edge gutter. The marker is
@@ -355,8 +349,8 @@ enum InteractivePicker {
         for slot in 0..<style.viewportRows {
             let idx = viewportTop + slot
             if idx >= rows.count {
-                writeStderr("\n")
-                if style == .expanded { writeStderr("\n") }
+                Terminal.writeStderr("\n")
+                if style == .expanded { Terminal.writeStderr("\n") }
                 continue
             }
             let row = rows[idx]
@@ -378,14 +372,14 @@ enum InteractivePicker {
             } else {
                 line1 = "\(marker)\(primaryText)"
             }
-            writeStderr("\(line1)\n")
+            Terminal.writeStderr("\(line1)\n")
 
             if style == .expanded {
                 // Metadata line under the name. Indented to align with
                 // the primary text (2 spaces past the marker column).
                 let metaWidth = max(10, cols - 4)
                 let meta = Self.truncate(row.secondary, to: metaWidth)
-                writeStderr("    \u{001B}[2m\(meta)\u{001B}[0m\n")
+                Terminal.writeStderr("    \u{001B}[2m\(meta)\u{001B}[0m\n")
             }
         }
 
@@ -394,7 +388,7 @@ enum InteractivePicker {
             loading: loading, exhausted: exhausted,
             viewportTop: viewportTop, selected: selected, total: rows.count,
             viewportRows: style.viewportRows)
-        writeStderr("\(footer)\n")
+        Terminal.writeStderr("\(footer)\n")
     }
 
     private static func footerText(
@@ -420,10 +414,6 @@ enum InteractivePicker {
     }
 
     // MARK: - Internal plumbing
-
-    private static func writeStderr(_ s: String) {
-        FileHandle.standardError.write(Data(s.utf8))
-    }
 
     /// Patches `VMIN`/`VTIME` into a `termios` value. Swift surfaces
     /// `c_cc` as a 20-element homogenous tuple; we reinterpret it as a
@@ -471,8 +461,7 @@ private func pickerSigintHandler(_ signal: Int32) {
     if var saved = PickerCleanup.savedAttrs {
         _ = tcsetattr(STDIN_FILENO, TCSANOW, &saved)
     }
-    let showCursor = "\u{001B}[?25h"
-    _ = showCursor.withCString { write(STDERR_FILENO, $0, strlen($0)) }
+    _ = Terminal.showCursor.withCString { write(STDERR_FILENO, $0, strlen($0)) }
     Darwin.signal(SIGINT, SIG_DFL)
     raise(SIGINT)
 }

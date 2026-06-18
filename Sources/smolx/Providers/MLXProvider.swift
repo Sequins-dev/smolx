@@ -160,7 +160,8 @@ actor MLXProvider: ModelProvider {
                     // drive `processor.prepare` + `TokenIterator` directly.
                     let dictMessages = PromptBuilder.messageDicts(from: messages)
                     let toolSpecs = Self.makeToolSpecs(tools)
-                    let generateParameters = Self.makeGenerateParameters(params)
+                    let generateParameters = MLXGenerationParameterBuilder.make(
+                        params, descriptor: descriptor)
 
                     // All MLX-side work (image construction, processor prep,
                     // generation loop, Harmony post-processing) happens inside
@@ -186,24 +187,76 @@ actor MLXProvider: ModelProvider {
                             images: collectedImages,
                             tools: toolSpecs,
                             additionalContext: nil)
-                        let input = try await context.processor.prepare(input: userInput)
+                        var input = try await context.processor.prepare(input: userInput)
+                        var localGenerateParameters = generateParameters
 
                         let promptTokens = input.text.tokens.size
+                        if descriptor.weightFormat == .gguf,
+                            let contextWindow = ModelSnapshotInspector.contextLength(for: descriptor)
+                        {
+                            let adjustment = GGUFPromptWindow.adjustment(
+                                promptTokens: promptTokens,
+                                contextWindow: contextWindow,
+                                requestedMaxTokens: localGenerateParameters.maxTokens)
+                            localGenerateParameters.maxTokens = adjustment.maxTokens
+                            if adjustment.shouldTrim {
+                                let compactMessages = GGUFPromptWindow
+                                    .compactMessagesForOversizedPrompt(messagesCopy)
+                                if compactMessages != messagesCopy {
+                                    let compactInput = UserInput(
+                                        messages: PromptBuilder.messageDicts(from: compactMessages),
+                                        images: Self.collectImages(
+                                            from: compactMessages, capability: capability),
+                                        tools: toolSpecs,
+                                        additionalContext: nil)
+                                    input = try await context.processor.prepare(input: compactInput)
+                                }
+
+                                var effectiveTokens = input.text.tokens.size
+                                if effectiveTokens > adjustment.promptTokenLimit {
+                                    let tokenIds = input.text.tokens.asArray(Int32.self).map(Int.init)
+                                    let trimmedIds = Array(tokenIds.suffix(adjustment.promptTokenLimit))
+                                    input = LMInput(tokens: MLXArray(trimmedIds))
+                                    effectiveTokens = trimmedIds.count
+                                }
+
+                                logger.warning(
+                                    "Compacted oversized GGUF prompt",
+                                    metadata: [
+                                        "model": "\(descriptor.name)",
+                                        "prompt_tokens": "\(promptTokens)",
+                                        "effective_prompt_tokens": "\(effectiveTokens)",
+                                        "context_window": "\(contextWindow)",
+                                        "max_tokens": "\(adjustment.maxTokens)",
+                                    ])
+                            }
+                        }
+                        if ProcessInfo.processInfo.environment["SMOLX_DEBUG_PROMPT_TAIL"] == "1" {
+                            let tokenIds = input.text.tokens.asArray(Int32.self).map(Int.init)
+                            let tailIds = Array(tokenIds.suffix(512))
+                            logger.debug(
+                                "Prompt tail",
+                                metadata: [
+                                    "model": "\(descriptor.name)",
+                                "tail": "\(context.tokenizer.decode(tokenIds: tailIds).debugDescription)",
+                                ])
+                        }
+                        let effectivePromptTokens = input.text.tokens.size
                         logger.debug(
                             "Generation starting",
                             metadata: [
                                 "model": "\(descriptor.name)",
-                                "prompt_tokens": "\(promptTokens)",
+                                "prompt_tokens": "\(effectivePromptTokens)",
                             ])
                         let genStart = Date()
 
-                        let kvCache = context.model.newCache(parameters: generateParameters)
+                        let kvCache = context.model.newCache(parameters: localGenerateParameters)
                         let iterator = try TokenIterator(
                             input: input, model: context.model,
-                            cache: kvCache, parameters: generateParameters)
+                            cache: kvCache, parameters: localGenerateParameters)
 
                         let (stream, generationTask) = MLXLMCommon.generateTask(
-                            promptTokenCount: promptTokens,
+                            promptTokenCount: effectivePromptTokens,
                             modelConfiguration: context.configuration,
                             tokenizer: context.tokenizer,
                             iterator: iterator)
@@ -291,7 +344,7 @@ actor MLXProvider: ModelProvider {
                             "Generation done",
                             metadata: [
                                 "model": "\(descriptor.name)",
-                                "prompt_tokens": "\(promptTokens)",
+                                "prompt_tokens": "\(effectivePromptTokens)",
                                 "gen_tokens": "\(genTokens)",
                                 "ms": "\(ms)",
                                 "tool_call": "\(emittedToolCall)",
@@ -370,21 +423,6 @@ actor MLXProvider: ModelProvider {
         return .ciImage(ci)
     }
 
-    private static func makeGenerateParameters(_ p: GenerationParams) -> GenerateParameters {
-        var params = GenerateParameters()
-        if let t = p.temperature { params.temperature = Float(t) }
-        if let tp = p.topP { params.topP = Float(tp) }
-        if let k = p.topK { params.topK = k }
-        if let mt = p.maxTokens { params.maxTokens = mt }
-        // 4-bit KV cache quantization: reduces attention memory bandwidth per
-        // decode step, which is the throughput bottleneck on Apple Silicon.
-        params.kvBits = 4
-        // Larger prefill batch keeps GPU better saturated on long prompts;
-        // python mlx-lm defaults to 2048, 1024 is a safe middle ground.
-        params.prefillStepSize = 1024
-        return params
-    }
-
     /// Runs `body` under a wired memory ticket when one is provided, otherwise
     /// runs `body` directly. This avoids duplicating the (large) `container.perform`
     /// closure when wired memory management is available.
@@ -403,7 +441,8 @@ actor MLXProvider: ModelProvider {
     private static func makeToolSpecs(_ tools: [ToolDefinition]) -> [ToolSpec]? {
         guard !tools.isEmpty else { return nil }
         return tools.compactMap { tool -> ToolSpec? in
-            guard let parameters = jsonValueToSendable(tool.inputSchema) as? [String: any Sendable] else {
+            let normalizedSchema = ToolSchemaNormalizer.normalize(tool.inputSchema)
+            guard let parameters = jsonValueToSendable(normalizedSchema) as? [String: any Sendable] else {
                 return nil
             }
             var function: [String: any Sendable] = [

@@ -1,5 +1,5 @@
 {
-  "originHash" : "3113eba43b61e84cdf21b34f13240d859538a3ba86a58ebbb6800f404653afad",
+  "originHash" : "ed7525434ac636739ddbb1a975dcbfc5bcc435906b8ba8be7c5dfff7b69841fc",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -31,19 +31,19 @@
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift.git",
+      "location" : "https://github.com/Sequins-dev/mlx-swift.git",
       "state" : {
-        "revision" : "61b9e011e09a62b489f6bd647958f1555bdf2896",
-        "version" : "0.31.3"
+        "branch" : "smolx-gguf-q4k",
+        "revision" : "beab6fe750ac942dfc7046d304d6173d55ae180f"
       }
     },
     {
       "identity" : "mlx-swift-lm",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift-lm.git",
+      "location" : "https://github.com/Sequins-dev/mlx-swift-lm.git",
       "state" : {
-        "revision" : "1c05248bb0899e2a7a4962b84d319cf12f4e12aa",
-        "version" : "3.31.3"
+        "branch" : "smolx-gguf-loader",
+        "revision" : "cd120def96a32556d1cb9ae8d33ac9c46d15a587"
       }
     },
     {

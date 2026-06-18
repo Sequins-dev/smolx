@@ -26,13 +26,13 @@ struct RetryPolicy: Sendable {
     /// `onAttempt` is called before each attempt (1-indexed); use it to surface
     /// "retrying" state to the UI.
     func run<T: Sendable>(
-        onAttempt: (@Sendable (_ attempt: Int, _ previousError: Error?) -> Void)? = nil,
+        onAttempt: (@Sendable (_ attempt: Int, _ previousError: Error?) async -> Void)? = nil,
         _ body: @Sendable () async throws -> T
     ) async throws -> T {
         var lastError: Error?
         for attempt in 1...maxAttempts {
             try Task.checkCancellation()
-            onAttempt?(attempt, lastError)
+            await onAttempt?(attempt, lastError)
             do {
                 return try await body()
             } catch is CancellationError {
