@@ -32,8 +32,8 @@ struct GGUFPromptWindowTests {
             contextWindow: 1024,
             requestedMaxTokens: 2048)
 
-        #expect(adjustment.promptTokenLimit == 1)
-        #expect(adjustment.maxTokens == 1023)
+        #expect(adjustment.promptTokenLimit == 768)
+        #expect(adjustment.maxTokens == 256)
         #expect(adjustment.shouldTrim == true)
     }
 

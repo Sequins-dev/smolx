@@ -22,7 +22,6 @@ struct OpencodeAgent: AgentPlugin {
         // The model entries MUST include `limit.context` and `limit.output`
         // — those are required by opencode's schema and the entire
         // provider gets silently dropped from the UI if they're missing.
-        // We use 32K context / 4K output as sensible defaults.
         //
         // Tier mapping: top-level `model` = smart, top-level `small_model`
         // = small. Opencode has no middle slot so `fast` is unused here.
@@ -35,14 +34,16 @@ struct OpencodeAgent: AgentPlugin {
             ]
             : installedModels
         let modelsJSON = modelEntries.map { m in
-            """
+            let context = Self.contextLimit(for: m)
+            let output = Self.outputLimit(for: m, context: context)
+            return """
               "\(m.name)": {
                 "id": "\(m.name)",
                 "name": "\(m.name)",
                 "tool_call": true,
                 "temperature": true,
                 "attachment": \(m.capability == .vision ? "true" : "false"),
-                "limit": { "context": 32768, "output": 4096 }
+                "limit": { "context": \(context), "output": \(output) }
               }
             """
         }.joined(separator: ",\n")
@@ -74,5 +75,16 @@ struct OpencodeAgent: AgentPlugin {
         return AgentPlan(
             executable: "opencode",
             env: ["OPENCODE_CONFIG_CONTENT": oneLineConfig])
+    }
+
+    private static func contextLimit(for descriptor: ModelDescriptor) -> Int {
+        ModelSnapshotInspector.contextLength(for: descriptor) ?? 32768
+    }
+
+    private static func outputLimit(for descriptor: ModelDescriptor, context: Int) -> Int {
+        if descriptor.weightFormat == .gguf {
+            return min(GGUFPromptWindow.defaultMaxTokens, max(1, context - 1))
+        }
+        return min(4096, max(1, context - 1))
     }
 }

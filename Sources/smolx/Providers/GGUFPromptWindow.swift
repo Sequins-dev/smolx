@@ -16,7 +16,11 @@ enum GGUFPromptWindow {
     ) -> Adjustment {
         let window = max(1, contextWindow)
         let requested = requestedMaxTokens ?? defaultMaxTokens
-        let maxTokens = min(max(1, requested), max(1, window - 1))
+        let cappedRequest =
+            requested >= window
+            ? defaultMaxTokens
+            : requested
+        let maxTokens = min(max(1, cappedRequest), max(1, window - 1))
         let promptLimit = max(1, window - maxTokens)
 
         return Adjustment(

@@ -4,6 +4,9 @@ enum ToolSchemaNormalizer {
         case .array(let values):
             return .array(values.map(normalize))
         case .object(let object):
+            if object.count == 1, case .object(let wrapped)? = object["type"] {
+                return .object(normalizeSchemaObject(wrapped))
+            }
             return .object(normalizeSchemaObject(object))
         default:
             return value
@@ -16,30 +19,57 @@ enum ToolSchemaNormalizer {
             normalized[key] = normalizeValue(value, forKey: key)
         }
 
-        if normalized["type"] == nil {
+        if let type = normalized["type"] {
+            let typeInfo = normalizeType(type)
+            normalized["type"] = .string(typeInfo.type)
+            if typeInfo.nullable {
+                normalized["nullable"] = .bool(true)
+            }
+        } else {
             normalized["type"] = inferredType(for: normalized)
         }
 
-        guard case .array(let typeValues)? = normalized["type"] else { return normalized }
+        return normalized
+    }
 
-        let stringTypes = typeValues.compactMap { value -> String? in
-            if case .string(let string) = value { return string }
-            return nil
+    private static func normalizeType(_ value: JSONValue) -> (type: String, nullable: Bool) {
+        switch value {
+        case .string(let string):
+            return (string, false)
+        case .array(let values):
+            let stringTypes = values.compactMap { value -> String? in
+                if case .string(let string) = value { return string }
+                return nil
+            }
+            let hasNull = values.contains { value in
+                isNullType(value)
+            }
+            return (
+                stringTypes.first(where: { $0.lowercased() != "null" }) ?? "string",
+                hasNull)
+        case .object(let object):
+            let normalized = normalizeSchemaObject(object)
+            if case .string(let type)? = normalized["type"] {
+                let nullable = normalized["nullable"] == .bool(true)
+                return (type, nullable)
+            }
+            return ("string", false)
+        case .null:
+            return ("string", true)
+        default:
+            return ("string", false)
         }
-        let hasNull = typeValues.contains { value in
-            if case .string(let string) = value { return string.lowercased() == "null" }
-            if case .null = value { return true }
+    }
+
+    private static func isNullType(_ value: JSONValue) -> Bool {
+        switch value {
+        case .string(let string):
+            return string.lowercased() == "null"
+        case .null:
+            return true
+        default:
             return false
         }
-
-        if let primaryType = stringTypes.first(where: { $0.lowercased() != "null" }) {
-            normalized["type"] = .string(primaryType)
-        }
-        if hasNull {
-            normalized["nullable"] = .bool(true)
-        }
-
-        return normalized
     }
 
     private static func normalizeValue(_ value: JSONValue, forKey key: String) -> JSONValue {

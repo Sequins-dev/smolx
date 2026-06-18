@@ -118,6 +118,36 @@ struct AgentEnvironmentTests {
         #expect(cfg.contains("\"small_model\": \"smolx/T-small\""))
     }
 
+    @Test func opencodePlanUsesInspectedGGUFLimits() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("smolx-opencode-gguf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let config = """
+            {
+              "text_config": {
+                "max_position_embeddings": 131072,
+                "sliding_window": 1024
+              }
+            }
+            """
+        try config.write(to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let installed = [
+            ModelDescriptor(
+                name: "gguf-model", repoId: "x/g", localPath: directory.path,
+                capability: .text, diskSizeBytes: 100, addedAt: Date(), weightFormat: .gguf)
+        ]
+        let plan = OpencodeAgent().plan(
+            baseURL: "http://localhost:8080",
+            models: UserConfig(smart: "gguf-model", fast: "gguf-model", small: "gguf-model"),
+            authToken: "tok",
+            installedModels: installed)
+        let cfg = plan.env["OPENCODE_CONFIG_CONTENT"] ?? ""
+        #expect(cfg.contains("\"limit\": { \"context\": 1024, \"output\": 256 }"))
+    }
+
     // MARK: - Pi
 
     @Test func piPlanSandboxesAgentDirAndListsAllModels() {
