@@ -55,7 +55,7 @@ struct GGUFPromptWindowTests {
             requestedMaxTokens: nil)
 
         #expect(adjustment.promptTokenLimit == 8000)
-        #expect(adjustment.maxTokens == 4096)
+        #expect(adjustment.maxTokens == 512)
         #expect(adjustment.shouldTrim == false)
     }
 
@@ -65,9 +65,20 @@ struct GGUFPromptWindowTests {
             contextWindow: 262144,
             requestedMaxTokens: 8192)
 
-        #expect(adjustment.promptTokenLimit == 253952)
-        #expect(adjustment.maxTokens == 8192)
-        #expect(adjustment.shouldTrim == true)
+        #expect(adjustment.promptTokenLimit == 260000)
+        #expect(adjustment.maxTokens == 512)
+        #expect(adjustment.shouldTrim == false)
+    }
+
+    @Test func capsOversizedCompletionBudgetBeforeTrimmingSmallPrompt() {
+        let adjustment = GGUFPromptWindow.adjustment(
+            promptTokens: 15,
+            contextWindow: 262144,
+            requestedMaxTokens: 262143)
+
+        #expect(adjustment.promptTokenLimit == 15)
+        #expect(adjustment.maxTokens == 512)
+        #expect(adjustment.shouldTrim == false)
     }
 
     @Test func oversizedPromptFallbackKeepsLatestUserMessageOnly() {

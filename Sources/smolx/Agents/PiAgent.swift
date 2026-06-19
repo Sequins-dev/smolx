@@ -31,7 +31,7 @@ struct PiAgent: AgentPlugin {
         let piModelsJSON = piOrdered.map { m in
             let inputs = m.capability == .vision ? "[\"text\", \"image\"]" : "[\"text\"]"
             let context = Self.contextLimit(for: m)
-            let maxTokens = Self.maxTokens(context: context)
+            let maxTokens = Self.maxTokens(for: m, context: context)
             return """
                       { "id": "\(m.name)", "name": "\(m.name)", "input": \(inputs), "contextWindow": \(context), "maxTokens": \(maxTokens) }
                 """
@@ -61,7 +61,9 @@ struct PiAgent: AgentPlugin {
         ModelSnapshotInspector.contextLength(for: descriptor) ?? 32768
     }
 
-    private static func maxTokens(context: Int) -> Int {
-        max(1, context - 1)
+    private static func maxTokens(for descriptor: ModelDescriptor, context: Int) -> Int {
+        let contextLimit = max(1, context - 1)
+        guard descriptor.weightFormat == .gguf else { return contextLimit }
+        return min(GGUFPromptWindow.defaultMaxTokens, contextLimit)
     }
 }

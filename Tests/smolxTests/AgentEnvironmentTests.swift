@@ -145,7 +145,7 @@ struct AgentEnvironmentTests {
             authToken: "tok",
             installedModels: installed)
         let cfg = plan.env["OPENCODE_CONFIG_CONTENT"] ?? ""
-        #expect(cfg.contains("\"limit\": { \"context\": 262144, \"output\": 262143 }"))
+        #expect(cfg.contains("\"limit\": { \"context\": 262144, \"output\": 512 }"))
     }
 
     // MARK: - Pi
@@ -214,7 +214,7 @@ struct AgentEnvironmentTests {
             installedModels: installed)
         let cfg = plan.files.first { $0.path.hasSuffix("models.json") }?.contents ?? ""
         #expect(cfg.contains("\"contextWindow\": 262144"))
-        #expect(cfg.contains("\"maxTokens\": 262143"))
+        #expect(cfg.contains("\"maxTokens\": 512"))
     }
 
     // MARK: - Crush

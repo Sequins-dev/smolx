@@ -16,7 +16,10 @@ enum MLXGenerationParameterBuilder {
             params.kvBits = 4
             params.prefillStepSize = 1024
         } else {
+            if p.temperature == nil { params.temperature = 0 }
             params.prefillStepSize = 32_768
+            params.repetitionPenalty = 1.08
+            params.repetitionContextSize = 128
         }
         return params
     }
