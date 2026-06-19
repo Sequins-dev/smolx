@@ -202,15 +202,14 @@ actor MLXProvider: ModelProvider {
                             if adjustment.shouldTrim {
                                 let compactMessages = GGUFPromptWindow
                                     .compactMessagesForOversizedPrompt(messagesCopy)
-                                if compactMessages != messagesCopy {
-                                    let compactInput = UserInput(
-                                        messages: PromptBuilder.messageDicts(from: compactMessages),
-                                        images: Self.collectImages(
-                                            from: compactMessages, capability: capability),
-                                        tools: toolSpecs,
-                                        additionalContext: nil)
-                                    input = try await context.processor.prepare(input: compactInput)
-                                }
+                                let compactTools: [ToolSpec]? = nil
+                                let compactInput = UserInput(
+                                    messages: PromptBuilder.messageDicts(from: compactMessages),
+                                    images: Self.collectImages(
+                                        from: compactMessages, capability: capability),
+                                    tools: compactTools,
+                                    additionalContext: nil)
+                                input = try await context.processor.prepare(input: compactInput)
 
                                 var effectiveTokens = input.text.tokens.size
                                 if effectiveTokens > adjustment.promptTokenLimit {
@@ -228,6 +227,7 @@ actor MLXProvider: ModelProvider {
                                         "effective_prompt_tokens": "\(effectiveTokens)",
                                         "context_window": "\(contextWindow)",
                                         "max_tokens": "\(adjustment.maxTokens)",
+                                        "tools_dropped": "\(toolSpecs != nil)",
                                     ])
                             }
                         }

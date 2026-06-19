@@ -54,9 +54,9 @@ struct GGUFPromptWindowTests {
             contextWindow: 262144,
             requestedMaxTokens: nil)
 
-        #expect(adjustment.promptTokenLimit == 8000)
+        #expect(adjustment.promptTokenLimit == 2048)
         #expect(adjustment.maxTokens == 512)
-        #expect(adjustment.shouldTrim == false)
+        #expect(adjustment.shouldTrim == true)
     }
 
     @Test func reservesLargeRequestedCompletionBudgetForLargeContext() {
@@ -65,9 +65,9 @@ struct GGUFPromptWindowTests {
             contextWindow: 262144,
             requestedMaxTokens: 8192)
 
-        #expect(adjustment.promptTokenLimit == 260000)
+        #expect(adjustment.promptTokenLimit == 2048)
         #expect(adjustment.maxTokens == 512)
-        #expect(adjustment.shouldTrim == false)
+        #expect(adjustment.shouldTrim == true)
     }
 
     @Test func capsOversizedCompletionBudgetBeforeTrimmingSmallPrompt() {
@@ -77,6 +77,17 @@ struct GGUFPromptWindowTests {
             requestedMaxTokens: 262143)
 
         #expect(adjustment.promptTokenLimit == 15)
+        #expect(adjustment.maxTokens == 512)
+        #expect(adjustment.shouldTrim == false)
+    }
+
+    @Test func leavesPromptsBelowPracticalGGUFWindowUnchanged() {
+        let adjustment = GGUFPromptWindow.adjustment(
+            promptTokens: 1600,
+            contextWindow: 262144,
+            requestedMaxTokens: 512)
+
+        #expect(adjustment.promptTokenLimit == 1600)
         #expect(adjustment.maxTokens == 512)
         #expect(adjustment.shouldTrim == false)
     }
