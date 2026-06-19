@@ -1,5 +1,6 @@
 import Foundation
 import HuggingFace
+import MLXLMCommon
 import Testing
 
 @testable import smolx
@@ -68,6 +69,28 @@ struct GGUFRuntimeFilesTests {
 
         #expect(GGUFRuntimeFiles.tokenizerEOSTokens(in: directory) == ["<turn|>"])
         #expect(GGUFRuntimeFiles.tokenizerTokenId("<turn|>", in: directory) == 106)
+    }
+
+    @Test func kQuantizationConfigCoversAllSupportedKFormats() {
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q8_0) == ["group_size": 32, "bits": 8])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q2K) == ["group_size": 16, "bits": 2])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q3K) == ["group_size": 16, "bits": 3])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q4K) == ["group_size": 32, "bits": 4])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q5K) == ["group_size": 32, "bits": 5])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q6K) == ["group_size": 16, "bits": 6])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q8K) == ["group_size": 16, "bits": 8])
+        #expect(GGUFRuntimeFiles.kQuantizationConfig(for: .q8_1) == nil)
+    }
+
+    @Test func intArrayOrScalarRepeatsScalarMetadata() throws {
+        let metadata: [String: GGUFReader.MetadataValue] = [
+            "gemma4.attention.head_count_kv": .uint32(2)
+        ]
+
+        let values = try GGUFRuntimeFiles.intArrayOrScalar(
+            metadata, "gemma4.attention.head_count_kv", repeatedCount: 4)
+
+        #expect(values == [2, 2, 2, 2])
     }
 
     private func makeModel(id: String, cardData: String?, tags: [String]) throws -> Model {

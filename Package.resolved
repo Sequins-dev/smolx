@@ -34,7 +34,7 @@
       "location" : "https://github.com/Sequins-dev/mlx-swift.git",
       "state" : {
         "branch" : "smolx-gguf-q4k",
-        "revision" : "beab6fe750ac942dfc7046d304d6173d55ae180f"
+        "revision" : "769c1eaf58cc6b224bda5dd08686b3fe1e4a9841"
       }
     },
     {
@@ -43,7 +43,7 @@
       "location" : "https://github.com/Sequins-dev/mlx-swift-lm.git",
       "state" : {
         "branch" : "smolx-gguf-loader",
-        "revision" : "cd120def96a32556d1cb9ae8d33ac9c46d15a587"
+        "revision" : "dd27c0d49e3714668c057a61c1503fff49ea1837"
       }
     },
     {

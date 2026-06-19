@@ -67,9 +67,11 @@ struct GGUFRuntimeFiles {
 
         let config = try gemma4TextConfig(from: reader, in: directory)
         if FileManager.default.fileExists(atPath: url.path),
-            configContainsQuantization(at: url),
+            configMatchesQuantization(at: url, expected: config["quantization"] as? [String: Any] ?? [:]),
             configMatchesTensorTying(at: url, reader: reader),
-            configMatchesEOS(at: url, expected: config["eos_token_id"] as? [Int] ?? [])
+            configMatchesEOS(at: url, expected: config["eos_token_id"] as? [Int] ?? []),
+            configMatchesUseDoubleWideMLP(at: url, expected: false),
+            configMatchesGGUFFile(at: url, expected: reader.url.lastPathComponent)
         {
             return
         }
@@ -83,7 +85,8 @@ struct GGUFRuntimeFiles {
 
         let layerTypes = try boolArray(metadata, "gemma4.attention.sliding_window_pattern")
             .map { $0 ? "sliding_attention" : "full_attention" }
-        let kvHeads = try intArray(metadata, "gemma4.attention.head_count_kv")
+        let kvHeads = try intArrayOrScalar(
+            metadata, "gemma4.attention.head_count_kv", repeatedCount: layerTypes.count)
         let slidingKVHeads = zip(layerTypes, kvHeads)
             .first { $0.0 == "sliding_attention" }?.1 ?? kvHeads.first ?? 1
         let globalKVHeads = zip(layerTypes, kvHeads)
@@ -114,6 +117,7 @@ struct GGUFRuntimeFiles {
             "max_position_embeddings": try int(metadata, "gemma4.context_length"),
             "attention_k_eq_v": hasFullAttentionWithoutValueProjection(reader: reader, layerTypes: layerTypes),
             "final_logit_softcapping": try float(metadata, "gemma4.final_logit_softcapping"),
+            "use_double_wide_mlp": false,
             "layer_types": layerTypes,
             "tie_word_embeddings": !hasOutputHead,
             "rope_parameters": [
@@ -136,16 +140,18 @@ struct GGUFRuntimeFiles {
             "model_type": "gemma4",
             "vocab_size": vocabSize,
             "eos_token_id": eosTokenIds(from: metadata, in: directory),
+            "gguf_file": reader.url.lastPathComponent,
             "quantization": quantizationConfig(from: reader),
             "text_config": textConfig,
         ]
     }
 
-    private static func configContainsQuantization(at url: URL) -> Bool {
+    private static func configMatchesQuantization(at url: URL, expected: [String: Any]) -> Bool {
         guard let data = try? Data(contentsOf: url),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let actual = json["quantization"] as? [String: Any]
         else { return false }
-        return json["quantization"] != nil
+        return NSDictionary(dictionary: actual).isEqual(to: expected)
     }
 
     private static func configMatchesTensorTying(at url: URL, reader: GGUFReader) -> Bool {
@@ -178,6 +184,25 @@ struct GGUFRuntimeFiles {
         return actual == expected
     }
 
+    private static func configMatchesUseDoubleWideMLP(at url: URL, expected: Bool) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let textConfig = json["text_config"] as? [String: Any],
+            let actual = textConfig["use_double_wide_mlp"] as? Bool
+        else { return false }
+
+        return actual == expected
+    }
+
+    private static func configMatchesGGUFFile(at url: URL, expected: String) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let actual = json["gguf_file"] as? String
+        else { return false }
+
+        return actual == expected
+    }
+
     private static func quantizationConfig(from reader: GGUFReader) -> [String: Any] {
         var result: [String: Any] = [
             "group_size": 32,
@@ -185,16 +210,7 @@ struct GGUFRuntimeFiles {
         ]
 
         for tensor in reader.tensors {
-            let option: [String: Any]?
-            switch tensor.type {
-            case .q4K:
-                option = ["group_size": 32, "bits": 4]
-            case .q6K:
-                option = ["group_size": 16, "bits": 6]
-            default:
-                option = nil
-            }
-            guard let option else { continue }
+            guard let option = kQuantizationConfig(for: tensor.type) else { continue }
 
             let mapped = GGUFReader.mapTensorName(tensor.name, architecture: "gemma4")
             guard mapped.hasSuffix(".weight") else { continue }
@@ -202,6 +218,27 @@ struct GGUFRuntimeFiles {
         }
 
         return result
+    }
+
+    static func kQuantizationConfig(for type: GGUFReader.TensorType) -> [String: Int]? {
+        switch type {
+        case .q8_0:
+            ["group_size": 32, "bits": 8]
+        case .q2K:
+            ["group_size": 16, "bits": 2]
+        case .q3K:
+            ["group_size": 16, "bits": 3]
+        case .q4K:
+            ["group_size": 32, "bits": 4]
+        case .q5K:
+            ["group_size": 32, "bits": 5]
+        case .q6K:
+            ["group_size": 16, "bits": 6]
+        case .q8K:
+            ["group_size": 16, "bits": 8]
+        default:
+            nil
+        }
     }
 
     private static func eosTokenIds(from metadata: [String: GGUFReader.MetadataValue], in directory: URL) -> [Int] {
@@ -356,5 +393,18 @@ struct GGUFRuntimeFiles {
                 throw ProviderError.loadFailed("Invalid integer array metadata key \(key)")
             }
         }
+    }
+
+    static func intArrayOrScalar(
+        _ metadata: [String: GGUFReader.MetadataValue],
+        _ key: String,
+        repeatedCount: Int
+    ) throws -> [Int] {
+        if case .array? = metadata[key] {
+            return try intArray(metadata, key)
+        }
+
+        let value = try int(metadata, key)
+        return Array(repeating: value, count: repeatedCount)
     }
 }
