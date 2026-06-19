@@ -160,8 +160,9 @@ actor MLXProvider: ModelProvider {
                     // drive `processor.prepare` + `TokenIterator` directly.
                     let dictMessages = PromptBuilder.messageDicts(from: messages)
                     let toolSpecs = Self.makeToolSpecs(tools)
+                    let samplingDefaults = ModelSamplingDefaults.load(for: descriptor)
                     let generateParameters = MLXGenerationParameterBuilder.make(
-                        params, descriptor: descriptor)
+                        params, descriptor: descriptor, samplingDefaults: samplingDefaults)
 
                     // All MLX-side work (image construction, processor prep,
                     // generation loop, Harmony post-processing) happens inside
@@ -247,6 +248,9 @@ actor MLXProvider: ModelProvider {
                             metadata: [
                                 "model": "\(descriptor.name)",
                                 "prompt_tokens": "\(effectivePromptTokens)",
+                                "temperature": "\(localGenerateParameters.temperature)",
+                                "top_p": "\(localGenerateParameters.topP)",
+                                "top_k": "\(localGenerateParameters.topK)",
                             ])
                         let genStart = Date()
 

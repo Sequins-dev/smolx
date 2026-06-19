@@ -23,13 +23,13 @@ struct MLXGenerationParameterBuilderTests {
         #expect(params.prefillStepSize >= 32_768)
     }
 
-    @Test func ggufModelsUseStableSamplingDefaults() {
+    @Test func ggufModelsUseModelLibrarySamplingDefaults() {
         let descriptor = descriptor(weightFormat: .gguf)
 
         let params = MLXGenerationParameterBuilder.make(
             GenerationParams.default, descriptor: descriptor)
 
-        #expect(params.temperature == 0)
+        #expect(params.temperature == 0.6)
         #expect(params.topP == 1)
         #expect(params.topK == 0)
         #expect(params.repetitionPenalty == 1.08)
