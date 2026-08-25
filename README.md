@@ -36,7 +36,19 @@ smolx run codex
 smolx run aider -- --message "summarise this README"
 ```
 
-`smolx run <agent>` execs the agent CLI with the env vars / config files it needs to talk to the local server. Supported agents: `claude`, `codex`, `aider`, `opencode`, `pi`, `crush`.
+`smolx run <agent>` execs the agent CLI with the env vars / config files it needs to talk to a smolx server. Supported agents: `claude`, `codex`, `aider`, `opencode`, `pi`, `crush`.
+
+To use a server on another machine, expose it with an auth token and point `run` at its base URL:
+
+```sh
+# Server machine
+smolx serve --bind 0.0.0.0 --auth-token "$SMOLX_TOKEN"
+
+# Client machine
+smolx run codex --base-url http://192.168.1.10:8080 --auth-token "$SMOLX_TOKEN"
+```
+
+`smolx run` always reads the model catalog from the selected server, including the default localhost server. Models do not need to be downloaded on the client machine.
 
 ## Commands
 
@@ -47,7 +59,7 @@ smolx run aider -- --message "summarise this README"
 | `smolx models` | List installed models (`--json` for machine output). |
 | `smolx rm <name>` | Remove a model from the registry (`--purge` to also delete cached files). |
 | `smolx config {set,get,unset} <tier> [value]` | Manage the `smart` / `fast` / `small` tier mapping that `smolx run` resolves. |
-| `smolx run <agent>` | Launch a coding agent CLI wired to the local server. |
+| `smolx run <agent>` | Launch a coding agent CLI wired to a local or remote server (`--base-url`). |
 
 See `smolx <command> --help` for details.
 

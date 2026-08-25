@@ -4,12 +4,15 @@ import Foundation
 import Logging
 
 struct RunCommand: AsyncParsableCommand {
+    static let defaultBaseURL = "http://127.0.0.1:8080"
+
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Launch an agent CLI with env vars pointing at the local smolx instance.",
+        abstract: "Launch an agent CLI connected to a local or remote smolx server.",
         discussion: """
             Supported agents: \(AgentRegistry.all.map(\.commandName).joined(separator: ", ")).
-            Requires `smolx serve` to be already running (pass --no-check to skip the health probe).
+            Requires `smolx serve` to be running locally, or pass --base-url for a remote server.
+            Pass --no-check to skip the health probe.
             Pass agent-specific arguments after `--`, e.g.
               smolx run claude --model llama-3.2-3b -- "summarise this README"
             """
@@ -35,7 +38,7 @@ struct RunCommand: AsyncParsableCommand {
     var small: String?
 
     @Option(name: .long, help: "URL of an already-running smolx. Defaults to http://127.0.0.1:8080.")
-    var baseUrl: String = "http://127.0.0.1:8080"
+    var baseUrl: String = Self.defaultBaseURL
 
     @Option(
         name: .long,
@@ -57,9 +60,22 @@ struct RunCommand: AsyncParsableCommand {
         parsing: .postTerminator, help: "Arguments forwarded to the agent CLI. Place after `--`.")
     var passthrough: [String] = []
 
+    var modelsURL: URL? { endpointURL(path: "v1/models") }
+    var healthURL: URL? { endpointURL(path: "healthz") }
+
+    mutating func validate() throws {
+        baseUrl = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard
+            let url = URL(string: baseUrl),
+            ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+            url.host != nil
+        else {
+            throw ValidationError("--base-url must be an absolute HTTP or HTTPS URL.")
+        }
+    }
+
     func run() async throws {
-        let registry = ModelRegistry()
-        let installedModels = (try? registry.load()) ?? []
+        let installedModels = try await serverModels()
         let userConfig = (try? UserConfig.load()) ?? UserConfig()
 
         guard
@@ -72,18 +88,19 @@ struct RunCommand: AsyncParsableCommand {
         else {
             FileHandle.standardError.write(
                 Data(
-                    "No model installed. Use `smolx pull <repo-id>` first, or pass --model.\n".utf8))
+                    "No model is available. Pass --model, or configure at least one model on the server.\n"
+                        .utf8))
             throw ExitCode.failure
         }
 
-        // Validate every resolved tier exists in the registry — refuse
+        // Validate every resolved tier exists in the selected server's catalog — refuse
         // to launch with a typo'd alias rather than letting the agent
         // surface "model not found" mid-session.
         for alias in Set([models.smart, models.fast, models.small].compactMap { $0 }) {
-            if try registry.find(alias) == nil {
+            if !installedModels.contains(where: { $0.matches(alias) }) {
                 FileHandle.standardError.write(
                     Data(
-                        "Unknown model alias '\(alias)'. Run `smolx models` to see installed models.\n".utf8))
+                        "Unknown model alias '\(alias)' on \(baseUrl).\n".utf8))
                 throw ExitCode.failure
             }
         }
@@ -104,7 +121,7 @@ struct RunCommand: AsyncParsableCommand {
         // Health-check the server first so we fail fast with a clear error
         // instead of letting the agent hang waiting for a non-existent endpoint.
         if !noCheck {
-            if !(await Self.serverReachable(baseUrl)) {
+            if !(await serverReachable()) {
                 FileHandle.standardError.write(
                     Data(
                         """
@@ -189,9 +206,47 @@ struct RunCommand: AsyncParsableCommand {
         return nil
     }
 
-    private static func serverReachable(_ baseURL: String) async -> Bool {
-        guard let url = URL(string: baseURL + "/healthz") else { return false }
+    private func endpointURL(path: String) -> URL? {
+        URL(string: baseUrl + "/" + path)
+    }
+
+    private func authenticatedRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    private func serverModels() async throws -> [ModelDescriptor] {
+        guard let url = modelsURL else { throw ValidationError("Invalid --base-url.") }
+        var request = authenticatedRequest(url: url)
+        request.timeoutInterval = 5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw ValidationError("Could not read the model catalog at \(url.absoluteString).")
+            }
+            return try JSONDecoder().decode(OpenAI.ModelsList.self, from: data).data.map { model in
+                ModelDescriptor(
+                    name: model.id,
+                    repoId: model.id,
+                    localPath: "",
+                    capability: .text,
+                    diskSizeBytes: 0,
+                    addedAt: Date(timeIntervalSince1970: TimeInterval(model.created)))
+            }
+        } catch let error as ValidationError {
+            throw error
+        } catch {
+            throw ValidationError(
+                "Could not connect to the smolx server at \(baseUrl): \(error.localizedDescription)")
+        }
+    }
+
+    private func serverReachable() async -> Bool {
+        guard let url = healthURL else { return false }
+        var request = authenticatedRequest(url: url)
         request.timeoutInterval = 2
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
