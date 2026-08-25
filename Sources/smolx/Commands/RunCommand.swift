@@ -60,7 +60,6 @@ struct RunCommand: AsyncParsableCommand {
         parsing: .postTerminator, help: "Arguments forwarded to the agent CLI. Place after `--`.")
     var passthrough: [String] = []
 
-    var usesRemoteServer: Bool { baseUrl != Self.defaultBaseURL }
     var modelsURL: URL? { endpointURL(path: "v1/models") }
     var healthURL: URL? { endpointURL(path: "healthz") }
 
@@ -76,13 +75,7 @@ struct RunCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let registry = ModelRegistry()
-        let installedModels: [ModelDescriptor]
-        if usesRemoteServer {
-            installedModels = try await remoteModels()
-        } else {
-            installedModels = (try? registry.load()) ?? []
-        }
+        let installedModels = try await serverModels()
         let userConfig = (try? UserConfig.load()) ?? UserConfig()
 
         guard
@@ -93,12 +86,10 @@ struct RunCommand: AsyncParsableCommand {
                 modelSugar: model,
                 firstInstalled: installedModels.first?.name)
         else {
-            let guidance =
-                usesRemoteServer
-                ? "Pass --model, or configure at least one model on the remote server."
-                : "Use `smolx pull <repo-id>` first, or pass --model."
             FileHandle.standardError.write(
-                Data("No model is available. \(guidance)\n".utf8))
+                Data(
+                    "No model is available. Pass --model, or configure at least one model on the server.\n"
+                        .utf8))
             throw ExitCode.failure
         }
 
@@ -107,10 +98,9 @@ struct RunCommand: AsyncParsableCommand {
         // surface "model not found" mid-session.
         for alias in Set([models.smart, models.fast, models.small].compactMap { $0 }) {
             if !installedModels.contains(where: { $0.matches(alias) }) {
-                let location = usesRemoteServer ? " on \(baseUrl)" : ""
                 FileHandle.standardError.write(
                     Data(
-                        "Unknown model alias '\(alias)'\(location).\n".utf8))
+                        "Unknown model alias '\(alias)' on \(baseUrl).\n".utf8))
                 throw ExitCode.failure
             }
         }
@@ -228,7 +218,7 @@ struct RunCommand: AsyncParsableCommand {
         return request
     }
 
-    private func remoteModels() async throws -> [ModelDescriptor] {
+    private func serverModels() async throws -> [ModelDescriptor] {
         guard let url = modelsURL else { throw ValidationError("Invalid --base-url.") }
         var request = authenticatedRequest(url: url)
         request.timeoutInterval = 5

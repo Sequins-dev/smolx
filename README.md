@@ -48,7 +48,7 @@ smolx serve --bind 0.0.0.0 --auth-token "$SMOLX_TOKEN"
 smolx run codex --base-url http://192.168.1.10:8080 --auth-token "$SMOLX_TOKEN"
 ```
 
-Client mode reads the model catalog from the remote server, so models do not need to be downloaded on the client.
+`smolx run` always reads the model catalog from the selected server, including the default localhost server. Models do not need to be downloaded on the client machine.
 
 ## Commands
 
