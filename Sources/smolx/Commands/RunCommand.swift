@@ -4,14 +4,14 @@ import Foundation
 import Logging
 
 struct RunCommand: AsyncParsableCommand {
-    static let defaultBaseURL = "http://127.0.0.1:8080"
+    static let serverBaseURL = "http://127.0.0.1:8080"
 
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Launch an agent CLI connected to a local or remote smolx server.",
+        abstract: "Launch an agent CLI connected to the local smolx server.",
         discussion: """
             Supported agents: \(AgentRegistry.all.map(\.commandName).joined(separator: ", ")).
-            Requires `smolx serve` to be running locally, or pass --base-url for a remote server.
+            Requires `smolx serve` or `smolx proxy` to be running locally.
             Pass --no-check to skip the health probe.
             Pass agent-specific arguments after `--`, e.g.
               smolx run claude --model llama-3.2-3b -- "summarise this README"
@@ -37,9 +37,6 @@ struct RunCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Override the `small` tier for this invocation only.")
     var small: String?
 
-    @Option(name: .long, help: "URL of an already-running smolx. Defaults to http://127.0.0.1:8080.")
-    var baseUrl: String = Self.defaultBaseURL
-
     @Option(
         name: .long,
         help: "Bearer token to send with requests (only needed if the server requires one).")
@@ -51,8 +48,7 @@ struct RunCommand: AsyncParsableCommand {
     var noCheck: Bool = false
 
     // `.postTerminator` only captures args appearing AFTER a literal `--`,
-    // so `smolx run claude --base-url X -- some prompt` parses correctly:
-    // `--base-url X` is consumed by smolx, `some prompt` goes to claude.
+    // so smolx options are consumed before agent arguments are forwarded.
     // With the old `.captureForPassthrough` strategy, everything after the
     // agent name (including our own flags) was greedily forwarded to the
     // child, which then errored out on flags it didn't recognise.
@@ -60,31 +56,22 @@ struct RunCommand: AsyncParsableCommand {
         parsing: .postTerminator, help: "Arguments forwarded to the agent CLI. Place after `--`.")
     var passthrough: [String] = []
 
+    var baseUrl: String { Self.serverBaseURL }
     var modelsURL: URL? { endpointURL(path: "v1/models") }
     var healthURL: URL? { endpointURL(path: "healthz") }
-
-    mutating func validate() throws {
-        baseUrl = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard
-            let url = URL(string: baseUrl),
-            ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-            url.host != nil
-        else {
-            throw ValidationError("--base-url must be an absolute HTTP or HTTPS URL.")
-        }
-    }
 
     func run() async throws {
         let installedModels = try await serverModels()
         let userConfig = (try? UserConfig.load()) ?? UserConfig()
 
         guard
-            let models = userConfig.resolve(
+            let models = Self.resolveModels(
+                persisted: userConfig,
+                installedModels: installedModels,
                 smartOverride: smart,
                 fastOverride: fast,
                 smallOverride: small,
-                modelSugar: model,
-                firstInstalled: installedModels.first?.name)
+                modelSugar: model)
         else {
             FileHandle.standardError.write(
                 Data(
@@ -218,29 +205,85 @@ struct RunCommand: AsyncParsableCommand {
         return request
     }
 
+    /// Apply persisted tier preferences only when those aliases exist in the
+    /// selected server's catalog. This keeps useful cross-server preferences,
+    /// but prevents aliases for locally installed models from blocking a remote
+    /// invocation. Explicit CLI overrides remain strict and are validated later.
+    static func resolveModels(
+        persisted: UserConfig,
+        installedModels: [ModelDescriptor],
+        smartOverride: String? = nil,
+        fastOverride: String? = nil,
+        smallOverride: String? = nil,
+        modelSugar: String? = nil
+    ) -> UserConfig? {
+        func available(_ alias: String?) -> String? {
+            guard let alias,
+                installedModels.contains(where: { $0.matches(alias) })
+            else { return nil }
+            return alias
+        }
+
+        let compatible = UserConfig(
+            smart: available(persisted.smart),
+            fast: available(persisted.fast),
+            small: available(persisted.small))
+        return compatible.resolve(
+            smartOverride: smartOverride,
+            fastOverride: fastOverride,
+            smallOverride: smallOverride,
+            modelSugar: modelSugar,
+            firstInstalled: installedModels.first?.name)
+    }
+
+    private struct RemoteModelsList: Decodable {
+        var data: [RemoteModelInfo]
+    }
+
+    private struct RemoteModelInfo: Decodable {
+        var id: String
+        var created: Int?
+    }
+
+    /// Decode the smallest useful subset of an OpenAI-compatible model catalog.
+    /// Metadata fields vary between compatible servers; launching an agent only
+    /// requires the model id, so a missing creation timestamp must not reject an
+    /// otherwise valid catalog.
+    static func decodeServerModels(_ data: Data) throws -> [ModelDescriptor] {
+        try JSONDecoder().decode(RemoteModelsList.self, from: data).data.map { model in
+            ModelDescriptor(
+                name: model.id,
+                repoId: model.id,
+                localPath: "",
+                capability: .text,
+                diskSizeBytes: 0,
+                addedAt: Date(timeIntervalSince1970: TimeInterval(model.created ?? 0)))
+        }
+    }
+
     private func serverModels() async throws -> [ModelDescriptor] {
-        guard let url = modelsURL else { throw ValidationError("Invalid --base-url.") }
+        guard let url = modelsURL else { throw ValidationError("Invalid local server URL.") }
         var request = authenticatedRequest(url: url)
         request.timeoutInterval = 5
+
+        let data: Data
+        let response: URLResponse
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw ValidationError("Could not read the model catalog at \(url.absoluteString).")
-            }
-            return try JSONDecoder().decode(OpenAI.ModelsList.self, from: data).data.map { model in
-                ModelDescriptor(
-                    name: model.id,
-                    repoId: model.id,
-                    localPath: "",
-                    capability: .text,
-                    diskSizeBytes: 0,
-                    addedAt: Date(timeIntervalSince1970: TimeInterval(model.created)))
-            }
-        } catch let error as ValidationError {
-            throw error
+            (data, response) = try await URLSession.shared.data(for: request)
         } catch {
             throw ValidationError(
                 "Could not connect to the smolx server at \(baseUrl): \(error.localizedDescription)")
+        }
+
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ValidationError("Could not read the model catalog at \(url.absoluteString).")
+        }
+
+        do {
+            return try Self.decodeServerModels(data)
+        } catch {
+            throw ValidationError(
+                "Could not decode the model catalog at \(url.absoluteString): \(error.localizedDescription)")
         }
     }
 

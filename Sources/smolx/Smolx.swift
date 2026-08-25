@@ -9,6 +9,7 @@ struct Smolx: AsyncParsableCommand {
         version: "0.0.1",
         subcommands: [
             ServeCommand.self,
+            ProxyCommand.self,
             PullCommand.self,
             ModelsCommand.self,
             RemoveCommand.self,
